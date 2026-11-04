@@ -1,0 +1,134 @@
+{
+ "version": 1,
+ "dossier": "/home/christophe/Vidéos/Copies d'écran",
+ "rangement": "/home/christophe/Vidéos/YouTube",
+ "projets": "/home/christophe/Vidéos/Copies d'écran",
+ "fiches": {
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-02 10-06-06.mp4": {
+   "titre": "Teste",
+   "sous_titre": "Le monteur",
+   "ligne1": "Premier essai",
+   "ligne2": "",
+   "ligne3": "",
+   "temps": 0.0,
+   "cadre": [
+    421,
+    0,
+    1077,
+    1200
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793610894005815607,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-02 19-04-24.mp4": {
+   "titre": "F1",
+   "sous_titre": "Mode d'emploi",
+   "ligne1": "Simplification de l'aide",
+   "ligne2": "sous le logiciel",
+   "ligne3": "",
+   "temps": 141.8,
+   "cadre": [
+    627,
+    73,
+    969,
+    1080
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793643544941286634,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-02 19-40-51.mp4": {
+   "titre": "F1",
+   "sous_titre": "L'aide sur chaque outil",
+   "ligne1": "Chaque outil expliqué",
+   "ligne2": "Même sans internet",
+   "ligne3": "",
+   "temps": 56.0,
+   "cadre": [
+    512,
+    82,
+    969,
+    1080
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793646195374616522,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-04 07-59-21.mp4": {
+   "titre": "Poche",
+   "sous_titre": "avec petit îlot",
+   "ligne1": "premier travail",
+   "ligne2": "avec explications",
+   "ligne3": "",
+   "temps": 1958.3,
+   "cadre": [
+    494,
+    0,
+    1077,
+    1200
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793778079739523543,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-04 10-52-44.mp4": {
+   "titre": "Poche",
+   "sous_titre": "Premier pas",
+   "ligne1": "vidéo débutant",
+   "ligne2": "",
+   "ligne3": "",
+   "temps": 868.4,
+   "cadre": [
+    456,
+    58,
+    969,
+    1080
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793787371408119240,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/Copies d'écran/2026-11-04 15-50-57.mp4": {
+   "titre": "Poche",
+   "sous_titre": "Débutant",
+   "ligne1": "Premier contact",
+   "ligne2": "du logiciel",
+   "ligne3": "",
+   "temps": 785.7,
+   "cadre": [
+    457,
+    12,
+    969,
+    1080
+   ],
+   "ignoree": false,
+   "vignette_ns": 1793807151731006548,
+   "youtube_id": "",
+   "envoyee_le": ""
+  },
+  "/home/christophe/Vidéos/YouTube/2026-10-28 09-17-01.mp4": {
+   "titre": "ATC",
+   "sous_titre": "ça avance",
+   "ligne1": "suoer",
+   "ligne2": "",
+   "ligne3": "",
+   "temps": 0.0,
+   "cadre": [
+    188,
+    0,
+    1077,
+    1200
+   ],
+   "ignoree": false,
+   "vignette_ns": 0,
+   "youtube_id": "",
+   "envoyee_le": ""
+  }
+ }
+}

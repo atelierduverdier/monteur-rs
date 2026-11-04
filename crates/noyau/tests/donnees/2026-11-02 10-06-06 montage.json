@@ -1,0 +1,408 @@
+{
+ "format": 1,
+ "video": "2026-11-02 10-06-06.mp4",
+ "duree": 94.666667,
+ "largeur": 1920,
+ "hauteur": 1200,
+ "journal": "/home/christophe/.local/share/monteur/gestes/gestes 2026-11-02 10-05-56.jsonl",
+ "zooms": [
+  {
+   "debut": 5.132000104904175,
+   "fin": 8.032000104904174,
+   "facteur": 2.0,
+   "cx": 0.0947,
+   "cy": 0.1195,
+   "origine": "journal",
+   "libelle": "Rectangle"
+  },
+  {
+   "debut": 33.85000010490417,
+   "fin": 36.750000104904174,
+   "facteur": 2.0,
+   "cx": 0.2259,
+   "cy": 0.097,
+   "origine": "journal",
+   "libelle": "Poche"
+  },
+  {
+   "debut": 45.20200010490417,
+   "fin": 48.10200010490418,
+   "facteur": 2.0,
+   "cx": 1.1247,
+   "cy": 0.709,
+   "origine": "journal",
+   "libelle": "Par passe"
+  },
+  {
+   "debut": 56.010000104904165,
+   "fin": 58.91000010490417,
+   "facteur": 2.0,
+   "cx": 1.1209,
+   "cy": 0.616,
+   "origine": "journal",
+   "libelle": "Profondeur"
+  },
+  {
+   "debut": 62.24200010490418,
+   "fin": 65.14200010490418,
+   "facteur": 2.0,
+   "cx": 0.6709,
+   "cy": 1.0305,
+   "origine": "journal",
+   "libelle": ""
+  },
+  {
+   "debut": 80.35200010490418,
+   "fin": 84.79100010490417,
+   "facteur": 2.0,
+   "cx": 0.6709,
+   "cy": 1.0305,
+   "origine": "journal",
+   "libelle": ""
+  }
+ ],
+ "etiquettes": [
+  {
+   "debut": 5.966,
+   "fin": 8.032,
+   "texte": "Rectangle",
+   "x": 0.0947,
+   "y": 0.135,
+   "genre": "reglage",
+   "origine": "journal"
+  },
+  {
+   "debut": 34.55,
+   "fin": 36.75,
+   "texte": "Poche",
+   "x": 0.2259,
+   "y": 0.126,
+   "genre": "reglage",
+   "origine": "journal"
+  },
+  {
+   "debut": 45.902,
+   "fin": 48.102,
+   "texte": "Par passe",
+   "x": 1.1247,
+   "y": 0.72,
+   "genre": "reglage",
+   "origine": "journal"
+  },
+  {
+   "debut": 56.71,
+   "fin": 58.91,
+   "texte": "Profondeur",
+   "x": 1.1209,
+   "y": 0.627,
+   "genre": "reglage",
+   "origine": "journal"
+  }
+ ],
+ "clics": [
+  {
+   "t": 5.832,
+   "x": 0.0894,
+   "y": 0.121,
+   "bouton": "gauche"
+  },
+  {
+   "t": 7.07,
+   "x": 0.4694,
+   "y": 0.318,
+   "bouton": "gauche"
+  },
+  {
+   "t": 8.383,
+   "x": 0.8119,
+   "y": 0.677,
+   "bouton": "gauche"
+  },
+  {
+   "t": 9.567,
+   "x": 0.5537,
+   "y": 0.419,
+   "bouton": "droit"
+  },
+  {
+   "t": 11.102,
+   "x": 0.4694,
+   "y": 0.315,
+   "bouton": "gauche"
+  },
+  {
+   "t": 13.438,
+   "x": 0.8119,
+   "y": 0.683,
+   "bouton": "gauche"
+  },
+  {
+   "t": 14.918,
+   "x": 0.6394,
+   "y": 0.514,
+   "bouton": "gauche"
+  },
+  {
+   "t": 18.814,
+   "x": 0.6731,
+   "y": 0.338,
+   "bouton": "gauche"
+  },
+  {
+   "t": 25.854,
+   "x": 0.8069,
+   "y": 0.475,
+   "bouton": "gauche"
+  },
+  {
+   "t": 30.222,
+   "x": 0.1819,
+   "y": 0.048,
+   "bouton": "gauche"
+  },
+  {
+   "t": 31.91,
+   "x": 0.545,
+   "y": 0.437,
+   "bouton": "gauche"
+  },
+  {
+   "t": 34.55,
+   "x": 0.2181,
+   "y": 0.095,
+   "bouton": "gauche"
+  },
+  {
+   "t": 37.038,
+   "x": 1.0981,
+   "y": 0.381,
+   "bouton": "gauche"
+  },
+  {
+   "t": 39.543,
+   "x": 0.3569,
+   "y": 0.483,
+   "bouton": "gauche"
+  },
+  {
+   "t": 41.375,
+   "x": 0.9031,
+   "y": 0.938,
+   "bouton": "gauche"
+  },
+  {
+   "t": 45.902,
+   "x": 1.1475,
+   "y": 0.712,
+   "bouton": "gauche"
+  },
+  {
+   "t": 47.815,
+   "x": 1.1513,
+   "y": 0.773,
+   "bouton": "gauche"
+  },
+  {
+   "t": 49.006,
+   "x": 1.14,
+   "y": 0.736,
+   "bouton": "gauche"
+  },
+  {
+   "t": 50.446,
+   "x": 0.8544,
+   "y": 0.889,
+   "bouton": "gauche"
+  },
+  {
+   "t": 54.439,
+   "x": 1.1338,
+   "y": 0.147,
+   "bouton": "gauche"
+  },
+  {
+   "t": 56.71,
+   "x": 1.1344,
+   "y": 0.616,
+   "bouton": "gauche"
+  },
+  {
+   "t": 61.166,
+   "x": 0.3481,
+   "y": 0.154,
+   "bouton": "gauche"
+  },
+  {
+   "t": 62.942,
+   "x": 0.535,
+   "y": 0.968,
+   "bouton": "gauche"
+  },
+  {
+   "t": 66.675,
+   "x": 0.685,
+   "y": 0.594,
+   "bouton": "milieu"
+  },
+  {
+   "t": 69.274,
+   "x": 0.6,
+   "y": 0.706,
+   "bouton": "milieu"
+  },
+  {
+   "t": 81.052,
+   "x": 0.535,
+   "y": 0.961,
+   "bouton": "gauche"
+  },
+  {
+   "t": 82.591,
+   "x": 0.6306,
+   "y": 1.05,
+   "bouton": "gauche"
+  },
+  {
+   "t": 84.63,
+   "x": 0.3294,
+   "y": 0.178,
+   "bouton": "gauche"
+  },
+  {
+   "t": 85.183,
+   "x": 0.3969,
+   "y": 0.183,
+   "bouton": "gauche"
+  },
+  {
+   "t": 85.59,
+   "x": 0.4606,
+   "y": 0.178,
+   "bouton": "gauche"
+  },
+  {
+   "t": 86.158,
+   "x": 0.5325,
+   "y": 0.182,
+   "bouton": "gauche"
+  },
+  {
+   "t": 87.558,
+   "x": 0.6138,
+   "y": 0.642,
+   "bouton": "milieu"
+  }
+ ],
+ "sous_titres": [
+  {
+   "debut": 1.06,
+   "fin": 4.32,
+   "texte": "Alors, je vais tester le logiciel de montage vidéo."
+  },
+  {
+   "debut": 4.69,
+   "fin": 10.85,
+   "texte": "Je vais faire une poche dans un rectangle que je vais centrer"
+  },
+  {
+   "debut": 10.85,
+   "fin": 11.64,
+   "texte": "par symétrie"
+  },
+  {
+   "debut": 11.64,
+   "fin": 16.03,
+   "texte": "en sélectionnant les trois points et le point central et"
+  },
+  {
+   "debut": 16.03,
+   "fin": 17.06,
+   "texte": "appuyant sur S."
+  },
+  {
+   "debut": 17.8,
+   "fin": 24.95,
+   "texte": "Je vais mettre une cote de largeur de 70 et de hauteur."
+  },
+  {
+   "debut": 27.74,
+   "fin": 32.16,
+   "texte": "Dedans, dans la section usinage, je clique dessus pour"
+  },
+  {
+   "debut": 32.16,
+   "fin": 34.64,
+   "texte": "faire la poche."
+  },
+  {
+   "debut": 34.64,
+   "fin": 39.63,
+   "texte": "Je change d'outil et je vais mettre une fraise de 3."
+  },
+  {
+   "debut": 39.87,
+   "fin": 46.32,
+   "texte": "Je vais mettre par passe 3 mm."
+  },
+  {
+   "debut": 48.56,
+   "fin": 56.5,
+   "texte": "Calculer la vitesse et dans l'opération, une profondeur de"
+  },
+  {
+   "debut": 56.5,
+   "fin": 57.55,
+   "texte": "10 mm."
+  },
+  {
+   "debut": 59.23,
+   "fin": 63.51,
+   "texte": "Dans la 3D, je regarde ce que ça donne par simulation."
+  },
+  {
+   "debut": 68.51,
+   "fin": 70.26,
+   "texte": "Je vois que ça donne ceci."
+  },
+  {
+   "debut": 79.8,
+   "fin": 81.83,
+   "texte": "Ah, je vais arrêter la simulation, je vais faire la pièce"
+  },
+  {
+   "debut": 81.83,
+   "fin": 82.28,
+   "texte": "finie."
+  },
+  {
+   "debut": 83.26,
+   "fin": 88.97,
+   "texte": "Je vais enlever les éléments perturbateurs et voilà, ma pièce"
+  },
+  {
+   "debut": 88.97,
+   "fin": 91.47,
+   "texte": "est terminée."
+  },
+  {
+   "debut": 91.67,
+   "fin": 93.01,
+   "texte": "Donc, je vais arrêter la vidéo maintenant."
+  }
+ ],
+ "coupes": [
+  {
+   "debut": 93.409,
+   "fin": 94.263,
+   "active": true,
+   "origine": "temps mort"
+  }
+ ],
+ "reglages": {
+  "montrer_clics": true,
+  "montrer_etiquettes": true,
+  "montrer_sous_titres": true,
+  "taille_sous_titres": 0.042,
+  "decalage_journal": 0.0
+ }
+}

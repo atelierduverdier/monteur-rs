@@ -14,3 +14,5 @@ dear-imgui-rs = "=0.22.0"
 wgpu = "30"
 ffmpeg-the-third = "6"
 cpal = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }

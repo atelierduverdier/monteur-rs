@@ -1,0 +1,11 @@
+TITRE
+F1 - Mode d'emploi
+
+DESCRIPTION
+- Simplification de l'aide sous le logiciel
+
+VerdierCAM : https://verdiercam.fr
+Le mode d'emploi : https://verdiercam.fr/mode-emploi/
+
+MOTS-CLÉS
+VerdierCAM,FA0,CNC
