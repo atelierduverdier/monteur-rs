@@ -14,8 +14,7 @@ pub mod montage;
 pub mod projet;
 pub mod sous_titres;
 pub mod temps_morts;
-
-use std::path::{Path, PathBuf};
+pub mod videos;
 
 // Les fichiers posés à côté d'une vidéo (`noyau.SUFFIXE_*` du Monteur 1).
 pub const SUFFIXE_PNG: &str = " vignette YouTube.png";
@@ -27,12 +26,30 @@ pub const SUFFIXE_PROJET: &str = " montage.json";
 pub const EXTENSION_PROJET: &str = ".monteur";
 pub const SUFFIXE_SRT_MONTAGE: &str = " montage YouTube.fr.srt";
 pub const SUFFIXE_SRT: &str = " avec vignette.fr.srt";
+/// Fichiers que le Monteur fabrique à partir d'une vidéo : ce ne sont pas des sources.
+pub const SUFFIXES_DERIVES: [&str; 2] = [" avec vignette", " montage YouTube"];
+/// Ce qui accompagne une vidéo et part avec elle quand on la range.
+pub const SUFFIXES_LIES: [&str; 9] = [
+    SUFFIXE_PNG,
+    SUFFIXE_JPG,
+    SUFFIXE_MONTEE,
+    SUFFIXE_DESCRIPTION,
+    SUFFIXE_MONTAGE,
+    SUFFIXE_PROJET,
+    EXTENSION_PROJET,
+    SUFFIXE_SRT_MONTAGE,
+    SUFFIXE_SRT,
+];
+pub const EXTENSIONS: [&str; 3] = ["mp4", "mkv", "mov"];
+/// La vignette : 1280 × 720, l'image de la vidéo à droite sur 646 × 720 (charte du 23/10/2026).
+pub const VIGNETTE_L: i64 = 1280;
+pub const VIGNETTE_H: i64 = 720;
+pub const IMAGE_L: i64 = 646;
+pub const IMAGE_H: i64 = 720;
+pub const FOND_MONTAGE: &str = "0x121214";
+pub const DUREE_VIGNETTE: f64 = 3.0;
 
-/// « <dossier>/<nom de la vidéo sans extension><suffixe> ».
-pub fn chemin_derive(video: &Path, suffixe: &str) -> PathBuf {
-    let nom = video.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    video.with_file_name(format!("{nom}{suffixe}"))
-}
+pub use videos::chemin_derive;
 
 /// Une erreur de lecture, en français, pour la montrer telle quelle.
 #[derive(Debug)]
