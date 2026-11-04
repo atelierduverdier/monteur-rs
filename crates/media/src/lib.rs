@@ -22,6 +22,7 @@ pub struct Lecteur {
 impl Lecteur {
     /// `duree` : celle que donne ffprobe (le noyau la lit).
     pub fn ouvrir(chemin: &Path, duree: f64, avec_son: bool) -> Result<Self, String> {
+        taire_les_avertissements();
         let video = video::Video::ouvrir(chemin)?;
         let son = if avec_son { son::Son::ouvrir(chemin)? } else { None };
         Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, duree })
@@ -99,10 +100,19 @@ impl Lecteur {
     }
 }
 
+/// ffmpeg n'écrit plus que les erreurs. Ses avertissements sur les prises d'OBS (« UDTA parsing
+/// failed retrying raw » : un bloc d'informations relu autrement, avec succès ; « Could not update
+/// timestamps for discarded samples » : les échantillons de mise en route du son AAC) remplissaient
+/// le terminal à chaque ouverture, sans rien d'utile. Les vraies erreurs remontent par `Result`.
+pub fn taire_les_avertissements() {
+    ffmpeg_the_third::util::log::set_level(ffmpeg_the_third::util::log::Level::Error);
+}
+
 /// La forme du son : `par_s` pics par seconde (le plus fort des deux voies, 0 à 1), pour la ligne
 /// de temps. Décode toute la prise : à lancer dans un fil.
 pub fn pics_du_son(chemin: &Path, par_s: u32) -> Result<Vec<f32>, String> {
     use ffmpeg_the_third as ff;
+    taire_les_avertissements();
     let err = |e: ff::Error| format!("{} : {e}", chemin.display());
     let mut entree = ff::format::input(chemin).map_err(err)?;
     let Some(flux) = entree.streams().best(ff::media::Type::Audio) else { return Ok(Vec::new()) };
