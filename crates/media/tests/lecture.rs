@@ -85,3 +85,28 @@ fn forme_du_son() {
     assert!((pics.len() as f64 - 94.6 * 50.0).abs() < 60.0);
     assert!(pics.iter().any(|&x| x > 0.1) && pics.iter().all(|&x| (0.0..=1.0).contains(&x)));
 }
+
+/// La mémoire reste bornée, à l'arrêt comme en lecture : jamais plus d'une image gardée hors de la
+/// file. Sans borne, toute la vidéo s'empilait (4 Go en 1,6 s à l'arrêt, le 04/11/2026).
+#[test]
+fn memoire_bornee() {
+    let Some(p) = prise() else { return };
+    let _tour = UN_A_LA_FOIS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut l = media::Lecteur::ouvrir(&p, 94.6, false).unwrap();
+    l.aller_a(10.0);
+    let mut pire = 0;
+    // À l'arrêt d'abord (la position ne bouge pas), puis en lecture.
+    for lecture in [false, true] {
+        if lecture {
+            l.lire();
+        }
+        let debut = Instant::now();
+        while debut.elapsed() < Duration::from_millis(1500) {
+            let _ = l.image();
+            pire = pire.max(l.video.en_attente());
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+    println!("au plus {pire} image(s) gardée(s) hors de la file");
+    assert!(pire <= 1, "{pire} images gardées");
+}

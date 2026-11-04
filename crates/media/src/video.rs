@@ -165,14 +165,22 @@ impl Video {
     /// L'image à montrer à l'instant `t` : la dernière décodée dont le temps est passé. Les plus
     /// vieilles sont jetées. `None` tant que rien n'est arrivé depuis le dernier saut.
     pub fn image_a(&mut self, t: f64) -> Option<&Image> {
-        while let Ok(i) = self.images.try_recv() {
-            if i.generation == self.generation {
-                self.attente.push_back(i);
+        // On ne prend dans la file que ce qu'il faut montrer, et au plus une image d'avance. La
+        // file, bornée, retient alors le fil de décodage. Vider toute la file à chaque tour
+        // empilait la vidéo entière en mémoire (9 Mo l'image, 1 800 images/s) : à l'arrêt, 4 Go
+        // en 1,6 s ; chez Christophe le 04/11/2026, 32 Go et le terminal tué par systemd-oomd.
+        loop {
+            while self.attente.front().is_some_and(|i| i.t <= t + 0.017) {
+                self.courante = self.attente.pop_front();
             }
-        }
-        // Une demi-image de marge : l'image de 1,033 s se montre à 1,02 s.
-        while self.attente.front().is_some_and(|i| i.t <= t + 0.017) {
-            self.courante = self.attente.pop_front();
+            if !self.attente.is_empty() {
+                break;
+            }
+            match self.images.try_recv() {
+                Ok(i) if i.generation == self.generation => self.attente.push_back(i),
+                Ok(_) => {}
+                Err(_) => break,
+            }
         }
         // Juste après un saut, la première image arrivée se montre même si elle est un peu en
         // avance (l'image clé est souvent avant, jamais après).
@@ -182,6 +190,11 @@ impl Video {
             self.courante = Some(premiere);
         }
         self.courante.as_ref().filter(|c| c.generation == self.generation)
+    }
+
+    /// Les images gardées hors de la file (pour le contrôle de la mémoire).
+    pub fn en_attente(&self) -> usize {
+        self.attente.len()
     }
 
     /// Attend (au plus `delai`) que l'image d'après le dernier saut soit là : pour les essais et
