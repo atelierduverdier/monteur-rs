@@ -5,6 +5,10 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Les trois contrôles décodent la même vidéo : en même temps, ils se volent les cœurs et la
+/// mesure de la lecture le paie (81 ms vus une fois, 17 ms seul). Ils passent l'un après l'autre.
+static UN_A_LA_FOIS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn prise() -> Option<PathBuf> {
     let p = std::env::home_dir()?.join("Vidéos/Copies d'écran/2026-11-02 10-06-06.mp4");
     p.exists().then_some(p)
@@ -23,6 +27,7 @@ fn image_ffmpeg(p: &PathBuf, t: f64) -> Vec<u8> {
 
 #[test]
 fn images_et_sauts() {
+    let _tour = UN_A_LA_FOIS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(p) = prise() else { return };
     let mut v = media::video::Video::ouvrir(&p).unwrap();
     for t in [0.0, 12.345, 55.6, 21.2, 80.0] {
@@ -43,6 +48,7 @@ fn images_et_sauts() {
 
 #[test]
 fn lecture_au_rythme_de_l_horloge() {
+    let _tour = UN_A_LA_FOIS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(p) = prise() else { return };
     // Sans son : ce contrôle ne fait pas de bruit, l'horloge est celle du système.
     let mut l = media::Lecteur::ouvrir(&p, 94.6, false).unwrap();
@@ -71,6 +77,7 @@ fn lecture_au_rythme_de_l_horloge() {
 
 #[test]
 fn forme_du_son() {
+    let _tour = UN_A_LA_FOIS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(p) = prise() else { return };
     let debut = Instant::now();
     let pics = media::pics_du_son(&p, 50).unwrap();
