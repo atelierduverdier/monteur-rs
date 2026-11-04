@@ -1,0 +1,385 @@
+//! La ligne de temps : la règle, une piste par sorte d'élément, la forme du son, la tête de
+//! lecture. Cliquer dans la règle place la tête ; un élément se choisit d'un clic, se déplace en le
+//! glissant, s'allonge par un bord ; glisser dans une piste vide en crée un, un double-clic en pose
+//! un de 2 s. Molette : défiler ; Ctrl+molette : resserrer autour de la souris.
+
+use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
+use noyau::montage::{Clic, Coupe, Etiquette, Montage, SousTitre, Zoom};
+
+use crate::etat::{Choix, PICS_PAR_S, Prise, Sorte, temps};
+
+const ENTETE: f32 = 120.0;
+const REGLE: f32 = 22.0;
+/// Un bord se saisit à tant de pixels.
+const BORD: f32 = 6.0;
+
+pub struct Ligne {
+    /// La seconde au bord gauche, et combien de secondes tient un pixel.
+    pub debut: f64,
+    pub par_px: f64,
+    /// La largeur de la prise la dernière fois : à l'ouverture d'une autre, tout se remontre.
+    duree_vue: f64,
+    prise_main: Option<Main>,
+}
+
+#[derive(Clone, Copy)]
+enum Main {
+    Tete,
+    Deplacer { choix: Choix, depart_t: f64, a0: f64, b0: f64 },
+    Bord { choix: Choix, gauche: bool },
+    Creer { sorte: Sorte, t0: f64 },
+}
+
+struct Piste {
+    nom: &'static str,
+    sorte: Option<Sorte>,
+    couleur: u32,
+    hauteur: f32,
+}
+
+const PISTES: [Piste; 6] = [
+    Piste { nom: "Zooms", sorte: Some(Sorte::Zoom), couleur: charte::PISTE_ZOOM, hauteur: 26.0 },
+    Piste { nom: "Étiquettes", sorte: Some(Sorte::Etiquette), couleur: charte::PISTE_ETIQUETTE, hauteur: 26.0 },
+    Piste { nom: "Clics", sorte: Some(Sorte::Clic), couleur: charte::TEXT_2, hauteur: 18.0 },
+    Piste { nom: "Sous-titres", sorte: Some(Sorte::SousTitre), couleur: 0xBDBDBD, hauteur: 26.0 },
+    Piste { nom: "Voix", sorte: None, couleur: charte::PISTE_VOIX, hauteur: 40.0 },
+    Piste { nom: "Coupes", sorte: Some(Sorte::Coupe), couleur: charte::PISTE_COUPE, hauteur: 24.0 },
+];
+
+/// Début et fin d'un élément (un clic : son instant, sur un dixième de seconde).
+pub fn intervalle(m: &Montage, c: Choix) -> Option<(f64, f64)> {
+    let i = c.indice;
+    match c.sorte {
+        Sorte::Zoom => m.zooms.get(i).map(|e| (e.debut, e.fin)),
+        Sorte::Etiquette => m.etiquettes.get(i).map(|e| (e.debut, e.fin)),
+        Sorte::Clic => m.clics.get(i).map(|e| (e.t, e.t + 0.1)),
+        Sorte::SousTitre => m.sous_titres.get(i).map(|e| (e.debut, e.fin)),
+        Sorte::Coupe => m.coupes.get(i).map(|e| (e.debut, e.fin)),
+    }
+}
+
+fn regler(m: &mut Montage, c: Choix, a: f64, b: f64) {
+    let (a, b) = (noyau::arrondi::arrondi(a, 3), noyau::arrondi::arrondi(b, 3));
+    let i = c.indice;
+    match c.sorte {
+        Sorte::Zoom => m.zooms.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
+        Sorte::Etiquette => m.etiquettes.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
+        Sorte::Clic => m.clics.get_mut(i).map(|e| e.t = a),
+        Sorte::SousTitre => m.sous_titres.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
+        Sorte::Coupe => m.coupes.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
+    };
+}
+
+fn nombre(m: &Montage, s: Sorte) -> usize {
+    match s {
+        Sorte::Zoom => m.zooms.len(),
+        Sorte::Etiquette => m.etiquettes.len(),
+        Sorte::Clic => m.clics.len(),
+        Sorte::SousTitre => m.sous_titres.len(),
+        Sorte::Coupe => m.coupes.len(),
+    }
+}
+
+fn libelle(m: &Montage, c: Choix) -> String {
+    let i = c.indice;
+    match c.sorte {
+        Sorte::Zoom => m.zooms.get(i).map(|z| format!("×{:.1}", z.facteur).replace('.', ",")),
+        Sorte::Etiquette => m.etiquettes.get(i).map(|e| e.texte.clone()),
+        Sorte::Clic => None,
+        Sorte::SousTitre => m.sous_titres.get(i).map(|s| s.texte.clone()),
+        Sorte::Coupe => m.coupes.get(i).map(|c| {
+            if !c.active {
+                "proposée".into()
+            } else if c.vitesse > 1.0 {
+                format!("×{}", c.vitesse)
+            } else {
+                String::new()
+            }
+        }),
+    }
+    .unwrap_or_default()
+}
+
+/// Un élément neuf de la sorte voulue, de `a` à `b`.
+fn creer(m: &mut Montage, sorte: Sorte, a: f64, b: f64) -> Choix {
+    let (a, b) = (noyau::arrondi::arrondi(a, 3), noyau::arrondi::arrondi(b, 3));
+    let autres = Default::default;
+    match sorte {
+        Sorte::Zoom => m.zooms.push(Zoom::nouveau(a, b)),
+        Sorte::Etiquette => m.etiquettes.push(Etiquette {
+            debut: a,
+            fin: b,
+            texte: "Étiquette".into(),
+            x: 0.5,
+            y: 0.5,
+            genre: "reglage".into(),
+            origine: "main".into(),
+            rect: None,
+            autres: autres(),
+        }),
+        Sorte::Clic => m.clics.push(Clic { t: a, x: 0.5, y: 0.5, bouton: "gauche".into(), autres: autres() }),
+        Sorte::SousTitre => m.sous_titres.push(SousTitre { debut: a, fin: b, texte: String::new(), autres: autres() }),
+        Sorte::Coupe => m.coupes.push(Coupe { debut: a, fin: b, active: true, origine: "main".into(), vitesse: 0.0, autres: autres() }),
+    }
+    let indice = nombre(m, sorte) - 1;
+    Choix { sorte, indice }
+}
+
+/// Après un tri, l'élément choisi a pu changer de place : on le retrouve par son début.
+fn retrouver(m: &mut Montage, c: Choix) -> Choix {
+    let Some((a, b)) = intervalle(m, c) else { return c };
+    m.trier();
+    let indice = (0..nombre(m, c.sorte))
+        .find(|&i| intervalle(m, Choix { sorte: c.sorte, indice: i }) == Some((a, b)))
+        .unwrap_or(c.indice);
+    Choix { sorte: c.sorte, indice }
+}
+
+impl Ligne {
+    pub fn new() -> Self {
+        Self { debut: 0.0, par_px: 0.05, duree_vue: -1.0, prise_main: None }
+    }
+
+    fn x_de(&self, t: f64, x0: f32) -> f32 {
+        x0 + ((t - self.debut) / self.par_px) as f32
+    }
+
+    fn t_de(&self, x: f32, x0: f32) -> f64 {
+        self.debut + (x - x0) as f64 * self.par_px
+    }
+
+    pub fn dessiner(&mut self, ui: &Ui, prise: &mut Prise) {
+        let dispo = ui.content_region_avail();
+        let origine = ui.cursor_screen_pos();
+        let largeur = (dispo[0] - ENTETE).max(50.0);
+        let (x0, x1) = (origine[0] + ENTETE, origine[0] + ENTETE + largeur);
+        let duree = prise.montage.duree.max(0.1);
+        if self.duree_vue != duree {
+            // Une autre prise : on la montre entière.
+            self.duree_vue = duree;
+            self.debut = 0.0;
+            self.par_px = duree / largeur as f64;
+        }
+        let tete = prise.lecteur.position();
+        // En lecture, la tête reste en vue.
+        if prise.lecteur.en_lecture() {
+            let fin_vue = self.t_de(x1, x0);
+            if tete > fin_vue || tete < self.debut {
+                self.debut = (tete - 0.1 * largeur as f64 * self.par_px).max(0.0);
+            }
+        }
+        let dl = ui.get_window_draw_list();
+        let c = charte::c;
+
+        // La règle : une graduation lisible selon le resserrement.
+        dl.add_rect(origine, [x1, origine[1] + REGLE], c(charte::BG_TITLE)).filled(true).build();
+        let pas = [0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0]
+            .into_iter()
+            .find(|p| p / self.par_px >= 70.0)
+            .unwrap_or(1200.0);
+        let mut g = (self.debut / pas).floor() * pas;
+        while self.x_de(g, x0) < x1 {
+            let x = self.x_de(g, x0);
+            if x >= x0 {
+                dl.add_line([x, origine[1] + 12.0], [x, origine[1] + REGLE], c(charte::BORDER)).build();
+                dl.add_text([x + 3.0, origine[1] + 3.0], c(charte::UNIT), temps(g));
+            }
+            g += pas;
+        }
+
+        // Les pistes.
+        let mut y = origine[1] + REGLE;
+        let mut rangees = Vec::new();
+        for piste in &PISTES {
+            let h = piste.hauteur;
+            dl.add_rect([x0, y], [x1, y + h - 1.0], [0.102, 0.102, 0.102, 1.0]).filled(true).build();
+            dl.add_rect([origine[0] + 8.0, y + h / 2.0 - 4.0], [origine[0] + 16.0, y + h / 2.0 + 4.0], c(piste.couleur))
+                .filled(true)
+                .rounding(2.0)
+                .build();
+            dl.add_text([origine[0] + 22.0, y + h / 2.0 - 8.0], c(charte::TEXT), piste.nom);
+            rangees.push((y, h, piste));
+            y += h;
+        }
+        let bas = y;
+
+        // Les passages coupés assombrissent toutes les pistes.
+        for (a, b) in prise.montage.coupes_actives() {
+            let (xa, xb) = (self.x_de(a, x0).max(x0), self.x_de(b, x0).min(x1));
+            if xb > xa {
+                dl.add_rect([xa, origine[1] + REGLE], [xb, bas], charte::vec(0x000000, 0.35)).filled(true).build();
+            }
+        }
+
+        // La forme du son.
+        if let Some(&(yv, hv, _)) = rangees.iter().find(|r| r.2.sorte.is_none()) {
+            let pics = &prise.pics;
+            // À l'échelle du plus fort de la prise : une voix monte rarement haut.
+            let plus_fort = pics.iter().copied().fold(0.05f32, f32::max);
+            let milieu = yv + hv / 2.0;
+            let mut x = x0;
+            while x < x1 && !pics.is_empty() {
+                let (ta, tb) = (self.t_de(x, x0), self.t_de(x + 2.0, x0));
+                let (ia, ib) = ((ta * PICS_PAR_S as f64) as usize, ((tb * PICS_PAR_S as f64) as usize).max((ta * PICS_PAR_S as f64) as usize + 1));
+                if ia >= pics.len() {
+                    break;
+                }
+                let p = pics[ia..ib.min(pics.len())].iter().copied().fold(0.0f32, f32::max);
+                let demi = (p / plus_fort * (hv - 6.0) / 2.0).max(0.5);
+                let coupe = prise.montage.dans_une_coupe(ta);
+                let couleur = if coupe { charte::vec(charte::PISTE_VOIX, 0.3) } else { charte::vec(charte::PISTE_VOIX, 0.85) };
+                dl.add_line([x, milieu - demi], [x, milieu + demi], couleur).build();
+                x += 2.0;
+            }
+        }
+
+        // Les éléments.
+        let souris = ui.io().mouse_pos();
+        let mut sous_souris: Option<(Choix, bool, bool)> = None; // choix, bord gauche, bord droit
+        for &(yp, hp, piste) in &rangees {
+            let Some(sorte) = piste.sorte else { continue };
+            for indice in 0..nombre(&prise.montage, sorte) {
+                let ch = Choix { sorte, indice };
+                let Some((a, b)) = intervalle(&prise.montage, ch) else { continue };
+                let (xa, mut xb) = (self.x_de(a, x0), self.x_de(b, x0));
+                if sorte == Sorte::Clic {
+                    xb = xa + 3.0;
+                }
+                if xb < x0 || xa > x1 {
+                    continue;
+                }
+                let (xa, xb) = (xa.max(x0), xb.min(x1).max(xa.max(x0) + 2.0));
+                let choisi = prise.choix == Some(ch);
+                let proposee = sorte == Sorte::Coupe && !prise.montage.coupes[indice].active;
+                let couleur = if sorte == Sorte::Coupe && prise.montage.coupes[indice].vitesse > 1.0 { charte::ALERTE } else { piste.couleur };
+                let fond = if choisi { 0.85 } else if proposee { 0.08 } else { 0.25 };
+                dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], charte::vec(couleur, fond)).filled(true).rounding(3.0).build();
+                dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], c(couleur)).rounding(3.0).thickness(if choisi { 2.0 } else { 1.0 }).build();
+                let texte = libelle(&prise.montage, ch);
+                if !texte.is_empty() && xb - xa > 24.0 {
+                    let visible: String = texte.chars().take(((xb - xa - 8.0) / 7.0) as usize).collect();
+                    let encre = if choisi { charte::ENCRE_SUR_ACCENT } else { charte::TEXT };
+                    dl.add_text([xa + 4.0, yp + hp / 2.0 - 8.0], c(encre), visible);
+                }
+                if souris[1] >= yp && souris[1] < yp + hp && souris[0] >= xa - BORD && souris[0] <= xb + BORD {
+                    let gauche = sorte != Sorte::Clic && (souris[0] - xa).abs() <= BORD;
+                    let droit = sorte != Sorte::Clic && (souris[0] - xb).abs() <= BORD;
+                    if souris[0] >= xa - BORD && souris[0] <= xb + BORD {
+                        sous_souris = Some((ch, gauche, droit));
+                    }
+                }
+            }
+        }
+
+        // Le début d'une coupe posée par C.
+        if let Some(a) = prise.coupe_commencee {
+            let xa = self.x_de(a, x0);
+            dl.add_line([xa, origine[1]], [xa, bas], c(charte::PISTE_COUPE)).thickness(2.0).build();
+        }
+
+        // La souris.
+        ui.set_cursor_screen_pos([x0, origine[1]]);
+        ui.invisible_button("ligne", [largeur, (bas - origine[1]).max(1.0)]);
+        let survol = ui.is_item_hovered();
+        let t_souris = self.t_de(souris[0], x0).clamp(0.0, duree);
+        let piste_souris = rangees.iter().find(|r| souris[1] >= r.0 && souris[1] < r.0 + r.1).and_then(|r| r.2.sorte);
+        if survol && let Some((_, g, d)) = sous_souris
+            && (g || d)
+        {
+            ui.set_mouse_cursor(Some(MouseCursor::ResizeEW));
+        }
+        if survol && ui.is_mouse_clicked(MouseButton::Left) {
+            self.prise_main = if souris[1] < origine[1] + REGLE {
+                Some(Main::Tete)
+            } else if let Some((ch, g, d)) = sous_souris {
+                prise.choix = Some(ch);
+                let (a0, b0) = intervalle(&prise.montage, ch).unwrap_or((0.0, 0.0));
+                prise.retenir();
+                Some(if g || d { Main::Bord { choix: ch, gauche: g } } else { Main::Deplacer { choix: ch, depart_t: t_souris, a0, b0 } })
+            } else {
+                prise.choix = None;
+                piste_souris.map(|sorte| Main::Creer { sorte, t0: t_souris }).or(Some(Main::Tete))
+            };
+        }
+        if survol && ui.is_mouse_double_clicked(MouseButton::Left) && sous_souris.is_none()
+            && let Some(sorte) = piste_souris
+        {
+            prise.retenir();
+            let ch = creer(&mut prise.montage, sorte, t_souris, (t_souris + 2.0).min(duree));
+            prise.choix = Some(retrouver(&mut prise.montage, ch));
+            prise.modifie();
+            self.prise_main = None;
+        }
+        if ui.is_mouse_down(MouseButton::Left) {
+            match self.prise_main {
+                Some(Main::Tete) => prise.lecteur.aller_a(t_souris),
+                Some(Main::Deplacer { choix, depart_t, a0, b0 }) => {
+                    let d = (t_souris - depart_t).clamp(-a0, duree - b0);
+                    regler(&mut prise.montage, choix, a0 + d, b0 + d);
+                    prise.modifie();
+                }
+                Some(Main::Bord { choix, gauche }) => {
+                    if let Some((a, b)) = intervalle(&prise.montage, choix) {
+                        let (a, b) = if gauche { (t_souris.min(b - 0.1), b) } else { (a, t_souris.max(a + 0.1)) };
+                        regler(&mut prise.montage, choix, a, b);
+                        prise.modifie();
+                    }
+                }
+                Some(Main::Creer { t0, .. }) => {
+                    let (a, b) = (t0.min(t_souris), t0.max(t_souris));
+                    let xa = self.x_de(a, x0);
+                    let xb = self.x_de(b, x0);
+                    if xb - xa > 4.0 {
+                        dl.add_rect([xa, origine[1] + REGLE], [xb, bas], charte::vec(charte::ACCENT, 0.15)).filled(true).build();
+                    }
+                }
+                None => {}
+            }
+        }
+        if ui.is_mouse_released(MouseButton::Left) {
+            match self.prise_main.take() {
+                Some(Main::Creer { sorte, t0 }) => {
+                    let (a, b) = (t0.min(t_souris), t0.max(t_souris));
+                    if (b - a) / self.par_px > 4.0 {
+                        prise.retenir();
+                        let ch = creer(&mut prise.montage, sorte, a, b);
+                        prise.choix = Some(retrouver(&mut prise.montage, ch));
+                        prise.modifie();
+                    } else {
+                        prise.lecteur.aller_a(t_souris);
+                    }
+                }
+                Some(Main::Deplacer { choix, .. }) | Some(Main::Bord { choix, .. }) => {
+                    prise.choix = Some(retrouver(&mut prise.montage, choix));
+                }
+                _ => {}
+            }
+        }
+        // Molette : défiler ; Ctrl : resserrer autour de la souris.
+        let molette = ui.io().mouse_wheel();
+        if survol && molette != 0.0 {
+            if ui.io().key_ctrl() {
+                let avant = t_souris;
+                self.par_px = (self.par_px * if molette > 0.0 { 0.8 } else { 1.25 }).clamp(0.002, duree / 200.0 + 0.002);
+                self.debut = avant - (souris[0] - x0) as f64 * self.par_px;
+            } else {
+                self.debut -= molette as f64 * 60.0 * self.par_px;
+            }
+        }
+        self.debut = self.debut.clamp(0.0, (duree - largeur as f64 * self.par_px).max(0.0));
+
+        // La tête de lecture.
+        let xt = self.x_de(tete, x0);
+        if xt >= x0 && xt <= x1 {
+            dl.add_line([xt, origine[1]], [xt, bas], c(charte::ACCENT)).thickness(2.0).build();
+            dl.add_triangle([xt - 6.0, origine[1]], [xt + 6.0, origine[1]], [xt, origine[1] + 10.0], c(charte::ACCENT))
+                .filled(true)
+                .build();
+        }
+        if survol && let Some((ch, _, _)) = sous_souris {
+            if let Some((a, b)) = intervalle(&prise.montage, ch) {
+                ui.tooltip_text(format!("{} → {}  {}", temps(a), temps(b), libelle(&prise.montage, ch)));
+            }
+        }
+    }
+}

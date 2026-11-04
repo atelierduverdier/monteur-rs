@@ -1,0 +1,11 @@
+[package]
+name = "media"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lire une prise : l'image et le son décodés en fond, l'horloge prise sur le son, les sauts"
+
+[dependencies]
+ffmpeg-the-third.workspace = true
+cpal.workspace = true

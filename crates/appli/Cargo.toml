@@ -1,0 +1,21 @@
+[package]
+name = "appli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Le Monteur 2 : la fenêtre"
+
+[[bin]]
+name = "monteur2"
+path = "src/main.rs"
+
+[dependencies]
+charte = { path = "../charte" }
+noyau = { path = "../noyau" }
+composeur = { path = "../composeur" }
+media = { path = "../media" }
+dear-app.workspace = true
+dear-imgui-rs.workspace = true
+wgpu.workspace = true
+tiny-skia = "0.11"

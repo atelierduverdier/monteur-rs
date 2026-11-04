@@ -14,6 +14,7 @@ pub mod montage;
 pub mod projet;
 pub mod sous_titres;
 pub mod temps_morts;
+pub mod verrou;
 pub mod videos;
 
 // Les fichiers posés à côté d'une vidéo (`noyau.SUFFIXE_*` du Monteur 1).

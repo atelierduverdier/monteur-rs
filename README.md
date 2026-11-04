@@ -8,6 +8,15 @@ service jusqu'à ce que celui-ci fasse une vidéo du jour entière.
 - Maquette : https://claude.ai/artifact/C1NuBZgz9sp1WUtKfbTQNo
 - Étape 0, essais de faisabilité et leurs mesures : [docs/etape-0.md](docs/etape-0.md)
 
+## Lancer
+
+```bash
+cargo build --release
+target/release/monteur2
+```
+
+Voir [docs/etape-3.md](docs/etape-3.md) pour ce que la fenêtre sait faire.
+
 ## Construire
 
 ```bash
@@ -22,5 +31,7 @@ bloc. FFmpeg 9 et ses en-têtes viennent du paquet `ffmpeg` du système.
 - `crates/charte` : couleurs de VerdierCAM posées sur le style d'ImGui.
 - `crates/noyau` : fichiers, préparation du montage, sous-titres ; contrôlé contre le Monteur 1 ([docs/etape-1.md](docs/etape-1.md)).
 - `crates/composeur` : l'image montée d'un instant et la vignette ; contrôlé contre le Monteur 1 ([docs/etape-2.md](docs/etape-2.md)).
+- `crates/media` : la lecture (image, son, horloge du son, sauts).
+- `crates/appli` : la fenêtre (`monteur2`).
 - `essais/` : les essais de l'étape 0 (fenêtre, vidéo, son), chacun avec ses mesures.
 - `ressources/polices` : Inter et JetBrains Mono (licence OFL).
