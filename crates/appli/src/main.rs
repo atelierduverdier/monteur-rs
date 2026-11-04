@@ -242,13 +242,16 @@ impl Monteur {
                     if m != 0.0 {
                         p.retenir();
                         let f = (z.facteur * if m > 0.0 { 1.08 } else { 1.0 / 1.08 }).clamp(noyau::montage::FACTEUR_MIN, noyau::montage::FACTEUR_MAX);
-                        p.montage.zooms[indice].facteur = noyau::arrondi::arrondi(f, 2);
+                        if let Some(zz) = p.montage.zooms.get_mut(indice) {
+                            zz.facteur = noyau::arrondi::arrondi(f, 2);
+                        }
                         p.modifie();
                     }
                 }
                 if let Some((depart, cx0, cy0)) = self.cadre_saisi {
-                    if ui.is_mouse_down(MouseButton::Left) {
-                        let zz = &mut p.montage.zooms[indice];
+                    if ui.is_mouse_down(MouseButton::Left)
+                        && let Some(zz) = p.montage.zooms.get_mut(indice)
+                    {
                         zz.cx = noyau::arrondi::arrondi((cx0 + ((souris[0] - depart[0]) / taille[0]) as f64).clamp(0.0, 1.0), 4);
                         zz.cy = noyau::arrondi::arrondi((cy0 + ((souris[1] - depart[1]) / taille[1]) as f64).clamp(0.0, 1.0), 4);
                         p.modifie();
@@ -558,7 +561,28 @@ impl Application for Monteur {
     }
 }
 
+/// Tout arrêt du programme s'écrit, avec l'endroit du code et la pile d'appels, dans
+/// `~/.local/share/monteur/monteur2-plantages.log` (et sur la sortie d'erreur) : lancé depuis le
+/// menu, rien d'autre n'en garderait trace.
+fn noter_les_plantages() {
+    let journal = chemin_fiches().with_file_name("monteur2-plantages.log");
+    std::panic::set_hook(Box::new(move |info| {
+        let pile = std::backtrace::Backtrace::force_capture();
+        let texte = format!(
+            "\n=== {} — Monteur 2 {} ===\n{info}\n{pile}\n",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+            env!("CARGO_PKG_VERSION")
+        );
+        eprintln!("{texte}");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&journal) {
+            use std::io::Write;
+            let _ = f.write_all(texte.as_bytes());
+        }
+    }));
+}
+
 fn main() {
+    noter_les_plantages();
     // Un seul Monteur à la fois, le 1 ou le 2 (le même verrou).
     let _verrou = match noyau::verrou::Verrou::prendre(&chemin_fiches().with_file_name("monteur.verrou")) {
         Ok(v) => v,
@@ -579,7 +603,13 @@ fn main() {
         ..Default::default()
     };
     if let Err(e) = run(config, Monteur::new()) {
-        eprintln!("le Monteur 2 s'arrête : {e}");
+        let texte = format!("le Monteur 2 s'arrête : {e}");
+        eprintln!("{texte}");
+        let journal = chemin_fiches().with_file_name("monteur2-plantages.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(journal) {
+            use std::io::Write;
+            let _ = writeln!(f, "\n=== {texte}");
+        }
         std::process::exit(1);
     }
 }

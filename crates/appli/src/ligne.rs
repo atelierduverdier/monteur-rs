@@ -314,7 +314,10 @@ impl Ligne {
             match self.prise_main {
                 Some(Main::Tete) => prise.lecteur.aller_a(t_souris),
                 Some(Main::Deplacer { choix, depart_t, a0, b0 }) => {
-                    let d = (t_souris - depart_t).clamp(-a0, duree - b0);
+                    // Un élément plus long que la vidéo (une fin tapée à la main) : `clamp` refuse un
+                    // plancher au-dessus du plafond et arrêterait tout.
+                    let plancher = -a0;
+                    let d = (t_souris - depart_t).clamp(plancher, (duree - b0).max(plancher));
                     regler(&mut prise.montage, choix, a0 + d, b0 + d);
                     prise.modifie();
                 }

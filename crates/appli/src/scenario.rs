@@ -2,7 +2,8 @@
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
 //! coupe <rang>`, `preparer` (attend la fin), `couper <a> <b>`, `defaire`, `capture <fichier.png>`
-//! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `quitter`.
+//! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
+//! `quitter`.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -87,6 +88,8 @@ impl Scenario {
                     }
                 }
                 "quitter" => return true,
+                // Pour vérifier que le journal des plantages s'écrit.
+                "planter" => panic!("plantage voulu par le déroulé d'essai"),
                 autre => eprintln!("scénario : étape inconnue « {autre} »"),
             }
         }

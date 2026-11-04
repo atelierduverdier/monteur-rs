@@ -15,8 +15,9 @@ avant et après).
 - **60,4 images/s** (calé sur l'écran), pire écart entre deux images 19,1 ms.
 - Une image 1920 × 1080 renvoyée à la carte à chaque tour : **0,82 ms** (`write_texture`).
 
-Reste à régler : la texture vidéo doit être en `Rgba8UnormSrgb` (en `Rgba8Unorm`, la mire sort
-trop sombre sur la surface sRGB).
+Corrigé le 04/11/2026 : la texture vidéo doit être en `Rgba8Unorm`, pas en `Rgba8UnormSrgb` —
+le shader d'ImGui convertit déjà toute couleur quand l'écran est en sRGB ; la mire de cet essai
+paraissait sombre parce qu'elle l'est (#1E1E1E), pas à cause du format.
 
 ## Essai 2 — décodage de la vidéo
 

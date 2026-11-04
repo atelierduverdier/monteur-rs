@@ -104,9 +104,11 @@ impl Vue {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // Les couleurs du composeur sont en sRGB (essai 1 : en Unorm, l'image sortait trop
-                // sombre).
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // En Unorm, pas en sRGB : le shader d'ImGui passe déjà toute couleur à la puissance
+                // 2,2 quand l'écran est en sRGB (dear-imgui-wgpu, `gamma_for_format`). Une texture
+                // sRGB était convertie deux fois : l'image sortait plus foncée (vu par Christophe le
+                // 04/11/2026 ; moyenne 154 à l'écran pour 219 peinte).
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
