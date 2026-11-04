@@ -20,5 +20,6 @@ bloc. FFmpeg 9 et ses en-têtes viennent du paquet `ffmpeg` du système.
 ## Dossiers
 
 - `crates/charte` : couleurs de VerdierCAM posées sur le style d'ImGui.
+- `crates/noyau` : fichiers, préparation du montage, sous-titres ; contrôlé contre le Monteur 1 ([docs/etape-1.md](docs/etape-1.md)).
 - `essais/` : les essais de l'étape 0 (fenêtre, vidéo, son), chacun avec ses mesures.
 - `ressources/polices` : Inter et JetBrains Mono (licence OFL).

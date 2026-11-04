@@ -4,12 +4,16 @@
 //! Monteurs travaillent sur les mêmes prises tant que le premier reste en service. Un champ que ce
 //! Monteur ne connaît pas est gardé tel quel et réécrit, jamais perdu.
 
+pub mod analyse;
+pub mod arrondi;
 pub mod description;
 pub mod ecriture;
 pub mod fiches;
 pub mod journal;
 pub mod montage;
 pub mod projet;
+pub mod sous_titres;
+pub mod temps_morts;
 
 use std::path::{Path, PathBuf};
 
