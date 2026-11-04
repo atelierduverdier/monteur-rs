@@ -1,0 +1,10 @@
+[package]
+name = "charte"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Couleurs et polices de la charte VerdierCAM, posées sur le style Dear ImGui"
+
+[dependencies]
+dear-imgui-rs.workspace = true

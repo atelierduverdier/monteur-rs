@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "essais/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+# Le groupe dear-imgui-* change de version d'un bloc : on l'épingle ici, jamais crate par crate.
+[workspace.dependencies]
+dear-app = "=0.22.0"
+dear-imgui-rs = "=0.22.0"
+wgpu = "30"
+ffmpeg-the-third = "6"
+cpal = "0.18"

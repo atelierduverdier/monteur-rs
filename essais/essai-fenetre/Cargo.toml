@@ -1,0 +1,13 @@
+[package]
+name = "essai-fenetre"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+charte = { path = "../../crates/charte" }
+dear-app.workspace = true
+dear-imgui-rs.workspace = true
+wgpu.workspace = true
