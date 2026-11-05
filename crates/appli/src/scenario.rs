@@ -1,7 +1,8 @@
 //! Un déroulé d'essai, pour essayer la fenêtre sans souris (sous Wayland, rien ne la pilote du
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
-//! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
+//! `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -73,6 +74,35 @@ impl Scenario {
                         p.modifie();
                     }
                 }),
+                "projet" => m.ranger_dans_un_projet(&mots[1..].join(" ")),
+                // `inserer <fichier|dessus|intercalee> …` : le dialogue de KDE ne se pilote pas.
+                "inserer" => {
+                    let par_dessus = mots.get(1) == Some(&"dessus");
+                    let source = std::path::PathBuf::from(mots[3..].join(" "));
+                    if let Some(p) = &mut m.prise {
+                        match crate::importer(&source, &p.dossier().to_path_buf(), par_dessus, nombre(2)) {
+                            Ok((v, d, b, t)) => p.ajouter_insertion(v, d, b, t),
+                            Err(e) => eprintln!("{e}"),
+                        }
+                    }
+                }
+                "titre" => {
+                    if let Some(p) = &m.prise {
+                        m.fiches.fiches.entry(noyau::videos::cle(&p.video)).or_default().titre = mots[1..].join(" ");
+                        m.vignette.salir();
+                    }
+                }
+                "ecrire_vignette" => {
+                    if let Some(p) = &m.prise {
+                        let f = m.fiches.fiches.entry(noyau::videos::cle(&p.video)).or_default();
+                        println!("  {}", m.vignette.ecrire_pour_essai(f, &p.video));
+                    }
+                }
+                "capture_vignette" => {
+                    if let Some(f) = mots.get(1) {
+                        m.vignette.enregistrer(f);
+                    }
+                }
                 "stop" => m.prise.iter_mut().for_each(|p| p.lecteur.stop()),
                 "couper" => m.prise.iter_mut().for_each(|p| p.ajouter_coupe(nombre(1), nombre(2))),
                 "defaire" => m.prise.iter_mut().for_each(|p| p.defaire()),

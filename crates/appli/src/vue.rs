@@ -2,7 +2,7 @@
 //! rendu : ce qu'on voit est ce qui sortira), à la taille du panneau, puis envoyée à la carte
 //! graphique. Elle ne se repeint que si quelque chose a changé.
 
-use composeur::dessin::{Compositeur, R};
+use composeur::dessin::{Compositeur, R, peindre_image};
 use composeur::police::Polices;
 use dear_app::{ExternalTextureHandle, GpuApi};
 use tiny_skia::Pixmap;
@@ -24,7 +24,10 @@ pub struct Vue {
     source: Option<Pixmap>,
     source_t: f64,
     /// Ce qui a servi à la dernière peinture : rien n'a bougé, on ne repeint pas.
-    cle: Option<(u64, u64, u32, u32, bool, u64)>,
+    cle: Option<(u64, u64, u32, u32, bool, u64, u64)>,
+    /// La dernière image d'une vidéo insérée, et son instant.
+    insere: Option<Pixmap>,
+    insere_t: f64,
     /// La taille voulue (celle du panneau au tour d'avant).
     pub taille: [u32; 2],
     /// Le temps d'une peinture (pour la barre d'état).
@@ -33,7 +36,7 @@ pub struct Vue {
 
 impl Vue {
     pub fn new() -> Self {
-        Self { texture: None, sortie: None, source: None, source_t: -1.0, cle: None, taille: [960, 600], dernier_ms: 0.0 }
+        Self { texture: None, sortie: None, source: None, source_t: -1.0, cle: None, insere: None, insere_t: -1.0, taille: [960, 600], dernier_ms: 0.0 }
     }
 
     pub fn oublier_source(&mut self) {
@@ -54,12 +57,25 @@ impl Vue {
             self.source = Pixmap::from_vec(image.rgba.clone(), taille);
             self.source_t = image.t;
         }
+        // Une vidéo insérée remplace l'image de la prise.
+        let dessus = prise.intercalee.is_none() && prise.montage.dessus_a(t).is_some();
+        let intercalee = prise.intercalee.is_some();
+        let mut insere_la = false;
+        if let Some(image) = prise.image_inseree(t) {
+            insere_la = true;
+            if image.t != self.insere_t || self.insere.is_none() {
+                let taille = tiny_skia::IntSize::from_wh(image.largeur, image.hauteur)?;
+                self.insere = Pixmap::from_vec(image.rgba.clone(), taille);
+                self.insere_t = image.t;
+            }
+        }
         let source = self.source.as_ref()?;
         // La place du panneau, aux proportions de la vidéo.
         let (sl, sh) = (source.width() as f32, source.height() as f32);
         let k = (self.taille[0] as f32 / sl).min(self.taille[1] as f32 / sh);
         let (l, h) = (((sl * k) as u32).max(16), ((sh * k) as u32).max(9));
-        let cle = (self.source_t.to_bits(), prise.version, l, h, sans_zoom, t.to_bits());
+        let insere_cle = if insere_la { self.insere_t.to_bits() } else { u64::MAX };
+        let cle = (self.source_t.to_bits(), prise.version, l, h, sans_zoom, t.to_bits(), insere_cle);
         if self.cle != Some(cle) || self.texture.as_ref().is_none_or(|x| x.l != l || x.h != h) {
             let debut = std::time::Instant::now();
             let sortie = match &mut self.sortie {
@@ -67,13 +83,26 @@ impl Vue {
                 _ => self.sortie.insert(Pixmap::new(l, h)?),
             };
             sortie.fill(tiny_skia::Color::BLACK);
-            Compositeur::new(&prise.montage, polices).peindre(
-                &mut sortie.as_mut(),
-                Some(source.as_ref()),
-                t,
-                R::new(0.0, 0.0, l as f64, h as f64),
-                sans_zoom,
-            );
+            let tout = R::new(0.0, 0.0, l as f64, h as f64);
+            match self.insere.as_ref().filter(|_| insere_la) {
+                Some(v) => {
+                    // Une autre vidéo, sans la déformer. Zooms, clics et étiquettes parlent de
+                    // l'écran filmé : ils se taisent ; la voix continue, ses sous-titres aussi.
+                    let (vl, vh) = (v.width() as f64, v.height() as f64);
+                    let k = (l as f64 / vl).min(h as f64 / vh);
+                    let cible = R::new((l as f64 - vl * k) / 2.0, (h as f64 - vh * k) / 2.0, vl * k, vh * k);
+                    peindre_image(&mut sortie.as_mut(), v.as_ref(), cible, (0.0, 0.0, vl, vh));
+                    if dessus && !intercalee {
+                        let voix = noyau::montage::Montage {
+                            sous_titres: prise.montage.sous_titres.clone(),
+                            reglages: prise.montage.reglages.clone(),
+                            ..Default::default()
+                        };
+                        Compositeur::new(&voix, polices).peindre_calque(&mut sortie.as_mut(), t, tout, (0.0, 0.0, l as f64, h as f64), l as f64, h as f64);
+                    }
+                }
+                None => Compositeur::new(&prise.montage, polices).peindre(&mut sortie.as_mut(), Some(source.as_ref()), t, tout, sans_zoom),
+            }
             self.envoyer(gpu, l, h);
             self.cle = Some(cle);
             self.dernier_ms = debut.elapsed().as_secs_f64() * 1e3;

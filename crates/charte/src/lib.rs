@@ -35,6 +35,7 @@ pub const ALERTE: u32 = 0xFFC107;
 pub const ERREUR: u32 = 0xF44336;
 
 // Pistes de la ligne de temps (maquette Design du 04/11/2026)
+pub const PISTE_VIDEO: u32 = 0x26A69A;
 pub const PISTE_ZOOM: u32 = 0x2979FF;
 pub const PISTE_ETIQUETTE: u32 = ACCENT;
 pub const PISTE_VOIX: u32 = SUCCES;

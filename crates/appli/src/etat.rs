@@ -17,6 +17,7 @@ pub enum Sorte {
     Clic,
     SousTitre,
     Coupe,
+    Insertion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,20 @@ pub struct Prise {
     pub preparation: Option<Preparation>,
     /// Grandit à chaque changement du montage : la visionneuse sait qu'il faut repeindre.
     pub version: u64,
+    /// Une vidéo intercalée en train de passer : la prise attend.
+    pub intercalee: Option<Intercalee>,
+    /// La vidéo posée par-dessus la prise, ouverte : son fichier, sa lecture, sa dernière seconde.
+    dessus: Option<(String, media::video::Video, f64)>,
+    /// La position au tour d'avant, pour voir la tête passer sur une insertion.
+    t_avant: f64,
+}
+
+pub struct Intercalee {
+    pub lecteur: media::Lecteur,
+    /// Où en sortir, en secondes de la vidéo intercalée.
+    fin: f64,
+    /// L'instant de la prise où reprendre.
+    t: f64,
 }
 
 pub const PICS_PAR_S: u32 = 50;
@@ -61,9 +76,8 @@ impl Prise {
             .map_err(|e| format!("ffprobe : {e}"))?;
         let infos = videos::lire_infos(&String::from_utf8_lossy(&sortie.stdout)).map_err(|e| e.0)?;
         let mut montage = Montage::lire(&chemin_montage(video)).unwrap_or_default();
-        if montage.video.is_empty() {
-            montage.video = video.to_string_lossy().into_owned();
-        }
+        // Déplacée dans un projet, la vidéo n'est plus où le montage le disait.
+        montage.video = video.to_string_lossy().into_owned();
         montage.duree = infos.duree;
         montage.largeur = infos.largeur;
         montage.hauteur = infos.hauteur;
@@ -87,6 +101,9 @@ impl Prise {
             coupe_commencee: None,
             preparation: None,
             version: 0,
+            intercalee: None,
+            dessus: None,
+            t_avant: 0.0,
         })
     }
 
@@ -174,6 +191,7 @@ impl Prise {
             Sorte::Clic if c.indice < m.clics.len() => drop(m.clics.remove(c.indice)),
             Sorte::SousTitre if c.indice < m.sous_titres.len() => drop(m.sous_titres.remove(c.indice)),
             Sorte::Coupe if c.indice < m.coupes.len() => drop(m.coupes.remove(c.indice)),
+            Sorte::Insertion if c.indice < m.insertions.len() => drop(m.insertions.remove(c.indice)),
             _ => {}
         }
         self.modifie();
@@ -211,6 +229,98 @@ impl Prise {
         self.modifie();
     }
 
+    /// Le dossier du projet : celui de la prise.
+    pub fn dossier(&self) -> &Path {
+        self.video.parent().unwrap_or(Path::new("."))
+    }
+
+    /// Le fichier d'une vidéo insérée (son chemin est relatif au dossier de la prise).
+    pub fn chemin_insere(&self, relatif: &str) -> PathBuf {
+        self.dossier().join(relatif)
+    }
+
+    /// Pose une vidéo importée à l'instant `t` ; elle se règle ensuite dans l'inspecteur.
+    pub fn ajouter_insertion(&mut self, video: String, duree: f64, par_dessus: bool, t: f64) {
+        self.retenir();
+        let t = noyau::arrondi::arrondi(t, 3);
+        let fin = if par_dessus { duree.min(self.montage.duree - t) } else { duree };
+        self.montage.insertions.push(noyau::montage::Insertion {
+            t,
+            video: video.clone(),
+            debut: 0.0,
+            fin: noyau::arrondi::arrondi(fin.max(0.1), 3),
+            mode: if par_dessus { "dessus" } else { "intercalee" }.into(),
+            autres: Default::default(),
+        });
+        self.montage.trier();
+        let indice = self.montage.insertions.iter().position(|i| i.t == t && i.video == video);
+        self.choix = indice.map(|indice| Choix { sorte: Sorte::Insertion, indice });
+        self.modifie();
+    }
+
+    /// Fait passer les vidéos intercalées : quand la tête arrive sur l'une, la prise s'arrête, la
+    /// vidéo passe avec son son, puis la prise reprend. Rend un message s'il y a un souci.
+    pub fn suivre_les_insertions(&mut self) -> Option<String> {
+        if let Some(ic) = &mut self.intercalee {
+            if ic.lecteur.position() >= ic.fin - 0.02 || ic.lecteur.position() >= ic.lecteur.duree - 0.02 {
+                let t = ic.t;
+                self.intercalee = None;
+                self.lecteur.aller_a(t);
+                self.lecteur.lire();
+                self.t_avant = t;
+            }
+            return None;
+        }
+        let t = self.lecteur.position();
+        let avant = std::mem::replace(&mut self.t_avant, t);
+        // Un saut de la tête n'est pas un passage : seule la lecture déclenche, sur moins d'une
+        // seconde.
+        if !self.lecteur.en_lecture() || t < avant || t - avant > 1.0 {
+            return None;
+        }
+        let i = self.montage.insertions.iter().find(|i| !i.par_dessus() && avant < i.t && i.t <= t)?.clone();
+        let chemin = self.chemin_insere(&i.video);
+        let duree = sonder_duree(&chemin).unwrap_or(i.fin);
+        match media::Lecteur::ouvrir(&chemin, duree, true) {
+            Ok(mut lecteur) => {
+                self.lecteur.arreter();
+                lecteur.aller_a(i.debut);
+                lecteur.lire();
+                self.intercalee = Some(Intercalee { lecteur, fin: i.fin, t: i.t });
+                None
+            }
+            Err(e) => Some(format!("Vidéo insérée illisible : {e}")),
+        }
+    }
+
+    /// Stoppe une vidéo intercalée : on reste sur la prise, au point d'insertion.
+    pub fn sortir_de_l_intercalee(&mut self) {
+        if let Some(ic) = self.intercalee.take() {
+            self.lecteur.aller_a(ic.t);
+        }
+    }
+
+    /// Ce qui remplace l'image de la prise à l'instant `t`, s'il y a quelque chose.
+    pub fn image_inseree(&mut self, t: f64) -> Option<&media::Image> {
+        if self.intercalee.is_some() {
+            return self.intercalee.as_mut()?.lecteur.image();
+        }
+        let (relatif, s) = self.montage.dessus_a(t).map(|(i, s)| (i.video.clone(), s))?;
+        let en_lecture = self.lecteur.en_lecture();
+        if self.dessus.as_ref().is_none_or(|d| d.0 != relatif) {
+            let video = media::video::Video::ouvrir(&self.chemin_insere(&relatif)).ok()?;
+            self.dessus = Some((relatif, video, f64::NEG_INFINITY));
+        }
+        let d = self.dessus.as_mut()?;
+        // En lecture, le décodage suit seul ; à l'arrêt ou après un saut, on va à la seconde voulue.
+        let ecart = (s - d.2).abs();
+        if ecart > 0.25 || (!en_lecture && ecart > 0.001) {
+            d.1.aller_a(s);
+        }
+        d.2 = s;
+        d.1.image_a(s)
+    }
+
     /// Un zoom neuf de 3 s à la tête de lecture, choisi : on trace son cadre dans la visionneuse.
     pub fn nouveau_zoom(&mut self, t: f64) {
         self.retenir();
@@ -230,6 +340,12 @@ impl Prise {
             self.preparation = Some(Preparation::lancer(&self.video, self.montage.clone()));
         }
     }
+}
+
+/// La durée d'une vidéo, par ffprobe.
+pub fn sonder_duree(chemin: &Path) -> Option<f64> {
+    let sortie = std::process::Command::new("ffprobe").args(videos::commande_sonder(chemin).into_iter().skip(1)).output().ok()?;
+    videos::lire_infos(&String::from_utf8_lossy(&sortie.stdout)).ok().map(|i| i.duree)
 }
 
 /// Le zoom d'un cadre tracé dans la visionneuse, du point fixe (ax, ay) à la souris (fx, fy), en

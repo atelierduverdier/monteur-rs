@@ -12,6 +12,7 @@ pub mod fiches;
 pub mod journal;
 pub mod montage;
 pub mod projet;
+pub mod projets;
 pub mod sous_titres;
 pub mod temps_morts;
 pub mod verrou;

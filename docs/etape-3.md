@@ -42,9 +42,23 @@ grossissement tapé sous 1 aurait arrêté le programme au déplacement du cadre
 
 Stop arrête et revient d'où la lecture est partie : en montant, on réécoute le même passage.
 
-Décidé avec lui le 05/11/2026 : un dossier par projet (`~/Vidéos/Projets/<nom>/`), la prise y est
-déplacée ; une vidéo insérée se pose au choix intercalée (la prise s'arrête, son propre son) ou
-par-dessus (la voix de la prise continue). À faire, avec la vignette (étape 6).
+Décidé avec lui le 05/11/2026, et fait :
+
+- **Un dossier par projet** (`~/Vidéos/Projets/<nom>/`, `noyau::projets`) : « Nouveau projet »
+  y déplace la prise, ce qui l'accompagne et sa fiche ; le sélecteur en haut de la liste passe des
+  prises d'OBS à un projet. Comme tout s'écrit à côté de la vidéo, le Monteur 1 ouvre ce dossier
+  aussi.
+- **Vidéos insérées** (`Montage.insertions`, piste Vidéos) : importées dans « Vidéos importées »
+  du projet, l'originale restant en place ; **intercalée**, la prise s'arrête, la vidéo passe avec
+  son son, la prise reprend ; **par-dessus**, elle remplace l'image, sans déformation, pendant que
+  la voix et ses sous-titres continuent. Zooms, clics et étiquettes se taisent pendant ce temps : ils
+  parlent de l'écran filmé. Le Monteur 1 ne les voit pas : un montage réenregistré par lui les perd.
+- **Vignette** (onglet à côté de la visionneuse) : image prise à la tête, cadrage à la souris et à
+  la molette, textes, débordements en rouge, PNG et JPG à côté de la vidéo, fiche mise à jour. Une
+  vignette faite ou retouchée ailleurs n'est remplacée qu'au second clic.
+
+Les fiches sont maintenant écrites par le Monteur 2 aussi ; un fichier illisible est mis de côté,
+jamais écrasé. Le Monteur 2 ne rend pas encore : le rendu (étape 4) devra tenir les insertions.
 
 ## Essayer sans souris
 

@@ -8,9 +8,11 @@ mod etat;
 mod ligne;
 mod miniatures;
 mod scenario;
+mod vignette;
 mod vue;
 
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
 
 use composeur::police::Polices;
 use dear_app::{
@@ -31,6 +33,7 @@ struct Panneaux {
     visionneuse: WindowKey,
     inspecteur: WindowKey,
     ligne: WindowKey,
+    vignette: WindowKey,
 }
 
 impl Panneaux {
@@ -41,6 +44,7 @@ impl Panneaux {
             visionneuse: cle("visionneuse", "Visionneuse"),
             inspecteur: cle("inspecteur", "Inspecteur"),
             ligne: cle("ligne", "Ligne de temps"),
+            vignette: cle("vignette", "Vignette"),
         }
     }
 
@@ -53,7 +57,7 @@ impl Panneaux {
                 DockSplit::Left,
                 0.17,
                 DockLayout::tabs([&self.prises]),
-                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.inspecteur]), DockLayout::tabs([&self.visionneuse])),
+                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.inspecteur]), DockLayout::tabs([&self.visionneuse, &self.vignette])),
             ),
         )
     }
@@ -151,6 +155,24 @@ struct Monteur {
     /// Le réglage d'un zoom à l'arrêt : ce que la souris tient dans la visionneuse.
     cadre_saisi: Option<Saisie>,
     miniatures: miniatures::Miniatures,
+    fiches: Fiches,
+    /// Une fiche changée, pas encore écrite.
+    fiches_sales: bool,
+    /// Un dossier à ouvrir au tour suivant.
+    a_changer: Option<PathBuf>,
+    /// Où sont les projets, et lesquels.
+    racine: PathBuf,
+    projets: Vec<PathBuf>,
+    /// Le dossier de départ (les prises d'OBS).
+    copies: PathBuf,
+    /// Le dossier a changé : les miniatures sont à refaire.
+    relire: bool,
+    /// « Nouveau projet » : ouvrir la boîte au prochain tour, et le nom tapé.
+    ouvrir_boite: bool,
+    nom_projet: String,
+    vignette: vignette::Vignette,
+    /// Une vidéo qu'on importe, en fond : son chemin relatif, sa durée, par-dessus ?, l'instant.
+    import: Option<Receiver<Result<Option<(String, f64, bool, f64)>, String>>>,
     /// Un déroulé d'essai (`MONTEUR2_SCENARIO`), sinon rien.
     scenario: Option<scenario::Scenario>,
 }
@@ -172,9 +194,17 @@ fn chemin_fiches() -> PathBuf {
 
 impl Monteur {
     fn new() -> Self {
-        // Les fiches ne sont que lues ici : le Monteur 1 reste celui qui les écrit.
-        let fiches = Fiches::lire(&chemin_fiches()).unwrap_or_default();
-        let dossier = Dossier::lire(&dossier_de_depart(&fiches), &fiches);
+        // Un fichier de fiches illisible est mis de côté, jamais écrasé (comme le Monteur 1).
+        let fiches = Fiches::lire(&chemin_fiches()).unwrap_or_else(|e| {
+            let cote = chemin_fiches().with_extension(format!("json.abime-{}", std::process::id()));
+            let _ = std::fs::rename(chemin_fiches(), &cote);
+            eprintln!("Fiches illisibles ({e}) : mises de côté sous {}", cote.display());
+            Fiches::default()
+        });
+        let copies = dossier_de_depart(&fiches);
+        let dossier = Dossier::lire(&copies, &fiches);
+        let racine = std::env::var_os("MONTEUR2_PROJETS").map(PathBuf::from).unwrap_or_else(noyau::projets::racine);
+        let projets = noyau::projets::lister(&racine);
         let message = format!("{} prise(s) dans {}", dossier.prises.len(), dossier.chemin.display());
         let miniatures = miniatures::Miniatures::lancer(dossier.prises.iter().map(|p| p.0.clone()).collect());
         Self {
@@ -190,8 +220,78 @@ impl Monteur {
             a_ouvrir: None,
             cadre_saisi: None,
             miniatures,
+            fiches,
+            fiches_sales: false,
+            a_changer: None,
+            racine,
+            projets,
+            copies,
+            relire: false,
+            ouvrir_boite: false,
+            nom_projet: String::new(),
+            vignette: vignette::Vignette::new(),
+            import: None,
             scenario: scenario::Scenario::depuis_l_environnement(),
         }
+    }
+
+    fn ecrire_fiches(&mut self) {
+        self.fiches_sales = false;
+        if let Err(e) = self.fiches.ecrire(&chemin_fiches(), &noyau::videos::dossier_defaut(), &noyau::videos::rangement_defaut()) {
+            self.message = format!("Fiches non écrites : {e}");
+        }
+    }
+
+    fn changer_de_dossier(&mut self, chemin: PathBuf) {
+        self.dossier = Dossier::lire(&chemin, &self.fiches);
+        self.projets = noyau::projets::lister(&self.racine);
+        self.relire = true;
+    }
+
+    /// La prise ouverte part dans le projet `nom`, avec tout ce qui l'accompagne.
+    fn ranger_dans_un_projet(&mut self, nom: &str) {
+        let Some(mut p) = self.prise.take() else { return };
+        if let Some(e) = p.ecrire_si_besoin(true) {
+            self.message = e;
+        }
+        let video = p.video.clone();
+        drop(p);
+        self.vue.oublier_source();
+        self.ecrire_fiches();
+        match noyau::projets::ranger_dans_un_projet(&mut self.fiches, &chemin_fiches(), &video, &self.racine, nom) {
+            Ok(nouvelle) => {
+                self.message = format!("Rangée dans le projet « {} ».", nom.trim());
+                self.changer_de_dossier(nouvelle.parent().unwrap_or(&self.racine).to_path_buf());
+                self.a_ouvrir = Some(nouvelle);
+            }
+            Err(e) => {
+                self.message = e.0;
+                self.a_ouvrir = Some(video);
+            }
+        }
+    }
+
+    /// Choisit une vidéo (dialogue de KDE), la copie dans le projet et la pose à la tête.
+    fn inserer_une_video(&mut self, par_dessus: bool) {
+        let Some(p) = &self.prise else { return };
+        if !p.dossier().starts_with(&self.racine) {
+            self.message = "Une vidéo se range avec son projet : fais d'abord « Nouveau projet ».".into();
+            return;
+        }
+        let (dossier, t) = (p.dossier().to_path_buf(), p.lecteur.position());
+        let depart = std::env::home_dir().unwrap_or_default().join("Vidéos");
+        let (envoi, recu) = mpsc::channel();
+        std::thread::spawn(move || {
+            let choix = std::process::Command::new("kdialog")
+                .arg("--getopenfilename")
+                .arg(&depart)
+                .arg("Vidéos (*.mp4 *.mkv *.mov *.MP4 *.MOV)")
+                .output();
+            let chemin = choix.map(|s| String::from_utf8_lossy(&s.stdout).trim().to_string()).unwrap_or_default();
+            let _ = envoi.send(if chemin.is_empty() { Ok(None) } else { importer(&PathBuf::from(chemin), &dossier, par_dessus, t).map(Some) });
+        });
+        self.import = Some(recu);
+        self.message = "Choisis la vidéo à insérer…".into();
     }
 
     fn ouvrir(&mut self, video: PathBuf) {
@@ -215,6 +315,8 @@ impl Monteur {
                     p.montage.sous_titres.len(),
                     p.montage.coupes.len()
                 );
+                let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().clone();
+                self.vignette.charger(&video, &fiche, p.infos.duree);
                 self.prise = Some(p);
             }
             Err(e) => self.message = format!("{} ne s'ouvre pas : {e}", video.display()),
@@ -230,6 +332,16 @@ impl Monteur {
         let (ctrl, maj) = (ui.io().key_ctrl(), ui.io().key_shift());
         let image = 1.0 / 30.0;
         let t = p.lecteur.position();
+        if let Some(ic) = &mut p.intercalee {
+            // Une vidéo intercalée passe : Espace la met en pause, Échap revient à la prise.
+            if ui.is_key_pressed(Key::Space) {
+                ic.lecteur.basculer();
+            }
+            if ui.is_key_pressed(Key::Escape) {
+                p.sortir_de_l_intercalee();
+            }
+            return;
+        }
         if ui.is_key_pressed(Key::Space) {
             p.lecteur.basculer();
         }
@@ -282,6 +394,17 @@ impl Monteur {
     }
 
     fn panneau_prises(&mut self, ui: &Ui, textures: &[Option<TextureId>]) {
+        // Où l'on est : les prises d'OBS, ou un projet.
+        let mut noms = vec!["Copies d'écran".to_string()];
+        noms.extend(self.projets.iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned()));
+        let mut rang = self.projets.iter().position(|p| *p == self.dossier.chemin).map_or(0, |i| i + 1);
+        let largeur = ui.push_item_width(-1.0);
+        if ui.combo_simple_string("##lieu", &mut rang, &noms) {
+            let chemin = if rang == 0 { self.copies.clone() } else { self.projets[rang - 1].clone() };
+            self.a_changer = Some(chemin);
+        }
+        drop(largeur);
+        ui.spacing();
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
         const HAUT: f32 = 58.0;
         let (mh, ml) = (46.0, 46.0 * miniatures::LARGEUR as f32 / miniatures::HAUTEUR as f32);
@@ -375,6 +498,56 @@ impl Monteur {
         if ui.button_with_size("Nouveau zoom (Z)", [0.0, 30.0]) {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
+        }
+        ui.same_line();
+        ui.dummy([12.0, 1.0]);
+        ui.same_line();
+        if ui.button_with_size("Intercaler une vidéo…", [0.0, 30.0]) {
+            self.inserer_une_video(false);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("À la tête de lecture : la prise s'arrête, la vidéo passe avec son son, la prise reprend.");
+        }
+        ui.same_line();
+        if ui.button_with_size("Vidéo par-dessus…", [0.0, 30.0]) {
+            self.inserer_une_video(true);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("À la tête de lecture : elle remplace l'image, ta voix continue.");
+        }
+        ui.same_line();
+        ui.dummy([12.0, 1.0]);
+        ui.same_line();
+        let dans_projet = self.prise.as_ref().is_some_and(|p| p.dossier().starts_with(&self.racine));
+        if !dans_projet && ui.button_with_size("Nouveau projet…", [0.0, 30.0]) {
+            let cle = self.prise.as_ref().map(|p| noyau::videos::cle(&p.video)).unwrap_or_default();
+            self.nom_projet = self.fiches.fiches.get(&cle).map(|f| f.titre.clone()).unwrap_or_default();
+            self.ouvrir_boite = true;
+        }
+    }
+
+    /// La boîte « Nouveau projet ».
+    fn boite_projet(&mut self, ui: &Ui) {
+        if std::mem::take(&mut self.ouvrir_boite) {
+            ui.open_popup("Nouveau projet");
+        }
+        if let Some(boite) = ui.begin_modal_popup("Nouveau projet") {
+            ui.text("Le nom du projet :");
+            let l = ui.push_item_width(380.0);
+            let entree = ui.input_text("##nom", &mut self.nom_projet).enter_returns_true(true).build();
+            drop(l);
+            ui.text_colored(charte::c(charte::UNIT), format!("La prise et tout ce qui l'accompagne partent dans {}/", self.racine.display()));
+            let valide = noyau::projets::nom_de_projet(&self.nom_projet).is_some();
+            if (ui.button_with_size("Créer le projet", [180.0, 30.0]) || entree) && valide {
+                let nom = self.nom_projet.clone();
+                ui.close_current_popup();
+                self.ranger_dans_un_projet(&nom);
+            }
+            ui.same_line();
+            if ui.button_with_size("Annuler##projet", [100.0, 30.0]) {
+                ui.close_current_popup();
+            }
+            boite.end();
         }
     }
 
@@ -473,11 +646,14 @@ impl Monteur {
         let en_lecture = p.lecteur.en_lecture();
         let forme = if en_lecture { Forme::Pause } else { Forme::Lire };
         if bouton_forme(ui, "lire", forme, true, if en_lecture { "Pause (Espace)" } else { "Lire (Espace)" }) {
-            p.lecteur.basculer();
+            match &mut p.intercalee {
+                Some(ic) => ic.lecteur.basculer(),
+                None => p.lecteur.basculer(),
+            }
         }
         ui.same_line();
         if bouton_forme(ui, "stop", Forme::Stop, false, "Stop : revient d'où la lecture est partie") {
-            p.lecteur.stop();
+            if p.intercalee.is_some() { p.sortir_de_l_intercalee() } else { p.lecteur.stop() }
         }
         ui.same_line();
         if bouton_forme(ui, "avancer", Forme::Avancer, false, "5 s en avant (L)") {
@@ -563,6 +739,21 @@ impl Monteur {
                 change |= nombre(ui, "Fin (s)", &mut c.fin, 0.1);
                 ui.text_colored(charte::c(charte::UNIT), format!("origine : {}", c.origine));
             }
+            Some(Choix { sorte: Sorte::Insertion, indice }) if indice < p.montage.insertions.len() => {
+                titre(ui, "Vidéo insérée");
+                let i = &mut p.montage.insertions[indice];
+                ui.text_wrapped(i.video.rsplit('/').next().unwrap_or(&i.video));
+                let modes = ["intercalée", "par-dessus"];
+                let mut m = usize::from(i.par_dessus());
+                if ui.combo_simple_string("Pose", &mut m, &modes) {
+                    i.mode = if m == 1 { "dessus" } else { "intercalee" }.into();
+                    change = true;
+                }
+                change |= nombre(ui, "Arrive à (s)", &mut i.t, 0.1);
+                change |= nombre(ui, "Début gardé (s)", &mut i.debut, 0.1);
+                change |= nombre(ui, "Fin gardée (s)", &mut i.fin, 0.1);
+                ui.text_colored(charte::c(charte::UNIT), format!("durée {}", temps(i.duree())));
+            }
             Some(Choix { sorte: Sorte::Clic, indice }) if indice < p.montage.clics.len() => {
                 titre(ui, "Clic");
                 let c = &mut p.montage.clics[indice];
@@ -619,6 +810,7 @@ impl Application for Monteur {
     fn gpu_lost(&mut self, g: &mut GpuContext<'_>) -> Result<(), RunError> {
         self.vue.perdre(g.gpu());
         self.miniatures.liberer(g.gpu());
+        self.vignette.liberer(g.gpu());
         Ok(())
     }
 
@@ -630,11 +822,35 @@ impl Application for Monteur {
                 context.request_exit();
             }
         }
+        if let Some(d) = self.a_changer.take() {
+            self.changer_de_dossier(d);
+        }
         if let Some(v) = self.a_ouvrir.take() {
+            if self.fiches_sales {
+                self.ecrire_fiches();
+            }
             self.ouvrir(v);
+        }
+        if let Some(r) = &self.import
+            && let Ok(resultat) = r.try_recv()
+        {
+            self.import = None;
+            match resultat {
+                Ok(Some((video, duree, par_dessus, t))) => {
+                    if let Some(p) = &mut self.prise {
+                        p.ajouter_insertion(video, duree, par_dessus, t);
+                    }
+                    self.message = "Vidéo posée : elle se règle dans l'inspecteur.".into();
+                }
+                Ok(None) => self.message = "Aucune vidéo choisie.".into(),
+                Err(e) => self.message = e,
+            }
         }
         if let Some(p) = &mut self.prise {
             if let Some(m) = p.suivre_le_fond() {
+                self.message = m;
+            }
+            if let Some(m) = p.suivre_les_insertions() {
                 self.message = m;
             }
             // En lecture, les passages coupés se sautent, comme au rendu.
@@ -656,18 +872,24 @@ impl Application for Monteur {
             Some(p) => self.vue.preparer(context.gpu(), p, &self.polices, sans_zoom),
             None => None,
         };
+        // Au début du tour, avant tout dessin : ce tour-ci ne doit plus citer les anciennes textures
+        // (libérées à la fin d'un tour, « Invalid texture ID » arrêtait tout).
+        if std::mem::take(&mut self.relire) {
+            self.miniatures.liberer(context.gpu());
+            self.miniatures = miniatures::Miniatures::lancer(self.dossier.prises.iter().map(|p| p.0.clone()).collect());
+        }
         self.miniatures.recevoir(context.gpu());
         let textures = self.miniatures.textures(context.gpu());
+        let cle_fiche = self.prise.as_ref().map(|p| noyau::videos::cle(&p.video));
+        let fiche = cle_fiche.as_ref().map(|c| self.fiches.fiches.entry(c.clone()).or_default());
+        let apercu = self.vignette.preparer(context.gpu(), fiche, &self.polices);
         let ui = context.ui();
         self.touches(ui);
 
-        let mut relire = false;
         if let Some(barre) = ui.begin_main_menu_bar() {
             if let Some(m) = ui.begin_menu("Fichier") {
                 if ui.menu_item("Relire le dossier") {
-                    let fiches = Fiches::lire(&chemin_fiches()).unwrap_or_default();
-                    self.dossier = Dossier::lire(&self.dossier.chemin.clone(), &fiches);
-                    relire = true;
+                    self.a_changer = Some(self.dossier.chemin.clone());
                 }
                 m.end();
             }
@@ -743,12 +965,30 @@ impl Application for Monteur {
         let panneaux = Panneaux::new();
         ui.window(&panneaux.prises).build(|| self.panneau_prises(ui, &textures));
         ui.window(&panneaux.visionneuse).build(|| self.panneau_visionneuse(ui, image));
+        ui.window(&panneaux.vignette).build(|| {
+            let Some(p) = &self.prise else {
+                ui.text_colored(charte::c(charte::TEXT_2), "Choisir une prise à gauche.");
+                return;
+            };
+            let (video, t, duree) = (p.video.clone(), p.lecteur.position(), p.infos.duree);
+            let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default();
+            if self.vignette.dessiner(ui, apercu, fiche, &video, t, duree, &self.polices, &mut self.message) {
+                self.fiches_sales = true;
+            }
+        });
         ui.window(&panneaux.inspecteur).build(|| self.panneau_inspecteur(ui));
         ui.window(&panneaux.ligne).build(|| {
             if let Some(p) = &mut self.prise {
                 self.ligne.dessiner(ui, p);
             }
         });
+
+        // Hors de l'onglet : il n'est dessiné que s'il est devant.
+        if std::mem::take(&mut self.vignette.ecrite) {
+            self.ecrire_fiches();
+            self.a_changer = Some(self.dossier.chemin.clone());
+        }
+        self.boite_projet(ui);
 
         // La barre d'état.
         ui.window("etat")
@@ -766,14 +1006,13 @@ impl Application for Monteur {
                     ui.text_colored(charte::c(charte::UNIT), format!("image peinte en {:.1} ms · {:.0} i/s", self.vue.dernier_ms, ui.io().framerate()));
                 }
             });
-        if relire {
-            self.miniatures.liberer(context.gpu());
-            self.miniatures = miniatures::Miniatures::lancer(self.dossier.prises.iter().map(|p| p.0.clone()).collect());
-        }
         Ok(())
     }
 
     fn shutdown(&mut self, _c: &mut dear_app::ShutdownContext<'_>) -> Result<(), RunError> {
+        if self.fiches_sales {
+            self.ecrire_fiches();
+        }
         if let Some(p) = &mut self.prise
             && let Some(e) = p.ecrire_si_besoin(true)
         {
@@ -781,6 +1020,13 @@ impl Application for Monteur {
         }
         Ok(())
     }
+}
+
+/// Copie une vidéo dans le projet et lit sa durée (dans un fil : une vidéo d'atelier pèse lourd).
+fn importer(source: &std::path::Path, dossier: &std::path::Path, par_dessus: bool, t: f64) -> Result<(String, f64, bool, f64), String> {
+    let relatif = noyau::projets::importer(source, dossier).map_err(|e| e.0)?;
+    let duree = etat::sonder_duree(&dossier.join(&relatif)).ok_or_else(|| format!("{} n'est pas une vidéo lisible", source.display()))?;
+    Ok((relatif, duree, par_dessus, t))
 }
 
 /// Tout arrêt du programme s'écrit, avec l'endroit du code et la pile d'appels, dans

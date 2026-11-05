@@ -244,3 +244,26 @@ fn description_lue_comme_le_monteur1() {
     }
     assert!(Description::lire(&donnees().join("absente.txt")).unwrap().vide());
 }
+
+/// Les vidéos insérées : relues, réécrites, comptées dans la durée montée ; un montage sans
+/// insertion s'écrit exactement comme avant (le contrôle de réécriture ci-dessus le tient).
+#[test]
+fn insertions() {
+    let texte = r#"{"format": 1, "duree": 100, "insertions": [
+        {"t": 50, "video": "Vidéos importées/b.mp4", "debut": 2, "fin": 8, "mode": "dessus"},
+        {"t": 10, "video": "Vidéos importées/a.mp4", "debut": 0, "fin": 5},
+        {"t": "x"}]}"#;
+    let m = Montage::depuis_valeur(serde_json::from_str(texte).unwrap()).unwrap();
+    assert_eq!(m.insertions.len(), 2, "la ligne abîmée est sautée");
+    assert_eq!(m.insertions[0].t, 10.0, "dans l'ordre du temps");
+    assert_eq!(m.insertions[0].mode, "intercalee", "le mode par défaut");
+    // 100 s, plus les 5 s intercalées ; celle par-dessus n'allonge rien.
+    assert_eq!(m.duree_montee(), 105.0);
+    assert!(m.dessus_a(49.9).is_none());
+    let (i, s) = m.dessus_a(53.0).unwrap();
+    assert_eq!((i.video.as_str(), s), ("Vidéos importées/b.mp4", 5.0));
+    assert!(m.dessus_a(56.0).is_none());
+    let relu = Montage::depuis_valeur(m.en_valeur()).unwrap();
+    assert_eq!(relu.insertions, m.insertions);
+    assert!(Montage::default().en_valeur().get("insertions").is_none());
+}

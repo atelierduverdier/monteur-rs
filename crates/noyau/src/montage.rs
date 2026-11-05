@@ -142,6 +142,39 @@ pub struct Coupe {
     pub autres: Autres,
 }
 
+/// Une autre vidéo dans le montage (celle de l'usinage à l'atelier). Le Monteur 1 ne la connaît pas :
+/// il ne la montre pas, et un montage réenregistré par lui la perd.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Insertion {
+    /// L'instant de la prise où elle arrive.
+    pub t: f64,
+    /// Son fichier, relatif au dossier de la prise.
+    pub video: String,
+    /// La part qu'on en garde, en secondes de cette vidéo.
+    pub debut: f64,
+    pub fin: f64,
+    /// « intercalee » : la prise s'arrête, la vidéo passe avec son propre son, la prise reprend.
+    /// « dessus » : elle remplace l'image pendant que la voix de la prise continue.
+    #[serde(default = "Insertion::mode_defaut")]
+    pub mode: String,
+    #[serde(flatten)]
+    pub autres: Autres,
+}
+
+impl Insertion {
+    fn mode_defaut() -> String {
+        "intercalee".into()
+    }
+
+    pub fn duree(&self) -> f64 {
+        (self.fin - self.debut).max(0.0)
+    }
+
+    pub fn par_dessus(&self) -> bool {
+        self.mode == "dessus"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Reglages {
@@ -190,6 +223,8 @@ pub struct Montage {
     pub clics: Vec<Clic>,
     pub sous_titres: Vec<SousTitre>,
     pub coupes: Vec<Coupe>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub insertions: Vec<Insertion>,
     pub reglages: Reglages,
     #[serde(flatten)]
     pub autres: Autres,
@@ -209,6 +244,7 @@ impl Default for Montage {
             clics: Vec::new(),
             sous_titres: Vec::new(),
             coupes: Vec::new(),
+            insertions: Vec::new(),
             reglages: Reglages::default(),
             autres: Autres::new(),
         }
@@ -270,6 +306,7 @@ impl Montage {
             clics: elements(&mut d, "clics"),
             sous_titres: elements(&mut d, "sous_titres"),
             coupes: elements(&mut d, "coupes"),
+            insertions: elements(&mut d, "insertions"),
             reglages: match d.remove("reglages") {
                 Some(r @ Value::Object(_)) => serde_json::from_value(r).unwrap_or_default(),
                 _ => Reglages::default(),
@@ -312,6 +349,7 @@ impl Montage {
         self.clics.sort_by(|a, b| ordre(a.t, b.t));
         self.sous_titres.sort_by(|a, b| ordre(a.debut, b.debut));
         self.coupes.sort_by(|a, b| ordre(a.debut, b.debut));
+        self.insertions.sort_by(|a, b| ordre(a.t, b.t));
     }
 
     fn borne(&self, fin: f64) -> f64 {
@@ -363,7 +401,16 @@ impl Montage {
     pub fn duree_montee(&self) -> f64 {
         let gagne: f64 = self.accelerations().iter().map(|&(a, b, v)| (b - a) * (1.0 - 1.0 / v)).sum();
         let coupe: f64 = self.coupes_actives().iter().map(|&(a, b)| b - a).sum();
-        (self.duree - coupe - gagne).max(0.0)
+        let ajoute: f64 = self.insertions.iter().filter(|i| !i.par_dessus()).map(Insertion::duree).sum();
+        (self.duree - coupe - gagne).max(0.0) + ajoute
+    }
+
+    /// La vidéo posée par-dessus la prise à l'instant `t`, et la seconde à en montrer.
+    pub fn dessus_a(&self, t: f64) -> Option<(&Insertion, f64)> {
+        self.insertions
+            .iter()
+            .find(|i| i.par_dessus() && i.t <= t && t < i.t + i.duree())
+            .map(|i| (i, i.debut + (t - i.t)))
     }
 
     pub fn dans_une_coupe(&self, t: f64) -> bool {
