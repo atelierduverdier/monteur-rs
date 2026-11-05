@@ -2,6 +2,7 @@
 //! 1 ; le dessin vient du composeur. Écrit `<vidéo> vignette YouTube.png` et `.jpg` à côté de la
 //! vidéo. Une vignette faite ou retouchée ailleurs n'est pas remplacée sans confirmation.
 
+use std::time::Instant;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 
@@ -22,6 +23,10 @@ struct Texture {
 }
 
 pub struct Vignette {
+    /// La tête vue au dernier tour, depuis quand elle s'est posée, et le dernier tour dessiné.
+    tete: Option<f64>,
+    bouge: Option<Instant>,
+    vu_a: Option<Instant>,
     texture: Option<Texture>,
     source: Option<Pixmap>,
     recu: Option<Receiver<Option<Pixmap>>>,
@@ -60,15 +65,39 @@ fn extraire(video: &Path, t: f64, duree: f64) -> Receiver<Option<Pixmap>> {
 
 impl Vignette {
     pub fn new() -> Self {
-        Self { texture: None, source: None, recu: None, sale: true, pixmap: None, confirmer: false, saisie: None, ecrite: false }
+        Self { tete: None, bouge: None, vu_a: None, texture: None, source: None, recu: None, sale: true, pixmap: None, confirmer: false, saisie: None, ecrite: false }
     }
 
     /// Une autre prise : on repart de l'image de sa fiche.
     pub fn charger(&mut self, video: &Path, fiche: &Fiche, duree: f64) {
         self.source = None;
         self.confirmer = false;
+        self.tete = None;
+        self.bouge = None;
         self.recu = Some(extraire(video, fiche.temps, duree));
         self.sale = true;
+    }
+
+    /// Onglet ouvert : la tête posée ailleurs dans la ligne de temps choisit l'image. Pas pendant une
+    /// lecture (la tête ne se pose jamais), ni en revenant sur l'onglet.
+    fn suivre_la_tete(&mut self, t: f64) -> bool {
+        let revenu = self.vu_a.is_none_or(|v| v.elapsed().as_secs_f64() > 0.5);
+        self.vu_a = Some(Instant::now());
+        if revenu || self.tete.is_none() {
+            self.tete = Some(t);
+            self.bouge = None;
+            return false;
+        }
+        if self.tete.is_some_and(|v| (v - t).abs() > 1e-3) {
+            self.tete = Some(t);
+            self.bouge = Some(Instant::now());
+            return false;
+        }
+        if self.bouge.is_some_and(|b| b.elapsed().as_secs_f64() > 0.2) {
+            self.bouge = None;
+            return true;
+        }
+        false
     }
 
     pub fn liberer(&mut self, gpu: &mut GpuApi<'_>) {
@@ -185,11 +214,12 @@ impl Vignette {
         ui.set_cursor_pos([debut[0] + large + 12.0, debut[1]]);
         ui.child_window("textes").size([0.0, 0.0]).build(ui, || {
             ui.text_colored(charte::c(charte::TEXT_2), format!("Image prise à {}", crate::etat::temps(fiche.temps)));
-            if ui.button("Prendre l'image de la tête de lecture") {
+            if self.suivre_la_tete(t_tete) {
                 fiche.temps = noyau::arrondi::arrondi(t_tete, 3);
                 self.recu = Some(extraire(video, fiche.temps, duree));
                 change = true;
             }
+            ui.text_wrapped("Clique dans la ligne de temps : l'image de cet instant vient dans la vignette.");
             ui.separator();
             let l = ui.push_item_width(-1.0);
             let champ = |ui: &Ui, nom: &str, id: &str, valeur: &mut String| {
@@ -240,6 +270,7 @@ impl Vignette {
             if self.confirmer {
                 ui.text_wrapped("Une vignette faite ou retouchée hors du Monteur est déjà là.");
             }
+            ui.text_wrapped("Écrite à côté de la vidéo, la vignette passe 3 s en tête au prochain rendu, et YouTube la reçoit à l'envoi.");
             ui.text_colored(charte::c(charte::UNIT), "Glisser l'image déplace le cadrage ; la molette resserre.");
         });
         change

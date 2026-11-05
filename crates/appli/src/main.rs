@@ -230,6 +230,7 @@ struct Monteur {
     /// Pour les essais : passer sur l'onglet YouTube.
     montrer_youtube: bool,
     montrer_texte: bool,
+    montrer_vignette: bool,
     envoi: Option<youtube::Envoi>,
     /// Quand on a regardé le dossier pour la dernière fois.
     regarde: std::time::Instant,
@@ -345,6 +346,7 @@ impl Monteur {
             youtube: youtube::Youtube::new(),
             montrer_youtube: false,
             montrer_texte: false,
+            montrer_vignette: false,
             envoi: None,
             regarde: std::time::Instant::now(),
             prise_choisie: None,
@@ -1787,6 +1789,9 @@ impl Application for Monteur {
             }
         });
 
+        if std::mem::take(&mut self.montrer_vignette) {
+            ui.set_window_focus(Some("Vignette###vignette"));
+        }
         if std::mem::take(&mut self.montrer_texte) {
             ui.set_window_focus(Some("Texte###texte"));
         }
