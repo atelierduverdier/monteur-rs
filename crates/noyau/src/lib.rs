@@ -53,6 +53,11 @@ pub const DUREE_VIGNETTE: f64 = 3.0;
 
 pub use videos::chemin_derive;
 
+/// L'heure qu'il est, comme le Monteur 1 note un envoi (`isoformat(timespec="seconds")`).
+pub fn maintenant() -> String {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
+}
+
 /// Une erreur de lecture, en français, pour la montrer telle quelle.
 #[derive(Debug)]
 pub struct Erreur(pub String);

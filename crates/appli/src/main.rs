@@ -10,6 +10,7 @@ mod miniatures;
 mod scenario;
 mod vignette;
 mod vue;
+mod youtube;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ struct Panneaux {
     inspecteur: WindowKey,
     ligne: WindowKey,
     vignette: WindowKey,
+    youtube: WindowKey,
 }
 
 impl Panneaux {
@@ -46,6 +48,7 @@ impl Panneaux {
             inspecteur: cle("inspecteur", "Inspecteur"),
             ligne: cle("ligne", "Ligne de temps"),
             vignette: cle("vignette", "Vignette"),
+            youtube: cle("youtube", "YouTube"),
         }
     }
 
@@ -58,7 +61,7 @@ impl Panneaux {
                 DockSplit::Left,
                 0.17,
                 DockLayout::tabs([&self.prises]),
-                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.inspecteur]), DockLayout::tabs([&self.visionneuse, &self.vignette])),
+                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.inspecteur]), DockLayout::tabs([&self.visionneuse, &self.vignette, &self.youtube])),
             ),
         )
     }
@@ -184,6 +187,10 @@ struct Monteur {
     bande: miniatures::Bande,
     bande_neuve: bool,
     rendu: Option<RenduEnCours>,
+    youtube: youtube::Youtube,
+    /// Pour les essais : passer sur l'onglet YouTube.
+    montrer_youtube: bool,
+    envoi: Option<youtube::Envoi>,
     /// Quand on a regardé le dossier pour la dernière fois.
     regarde: std::time::Instant,
     /// Une prise ou un fichier projet choisis dans le dialogue de KDE.
@@ -251,6 +258,9 @@ impl Monteur {
             bande: miniatures::Bande::vide(),
             bande_neuve: false,
             rendu: None,
+            youtube: youtube::Youtube::new(),
+            montrer_youtube: false,
+            envoi: None,
             regarde: std::time::Instant::now(),
             prise_choisie: None,
             projet_choisi: None,
@@ -370,6 +380,27 @@ impl Monteur {
         self.message = "Rendu lancé : tu peux continuer à monter pendant ce temps.".into();
     }
 
+    /// Lance l'envoi de la prise ouverte, en privé.
+    fn envoyer(&mut self) {
+        let Some(p) = &self.prise else { return };
+        let Some(montee) = youtube::Youtube::a_envoyer(&p.video) else {
+            self.message = "Rien à envoyer : il faut d'abord rendre la vidéo, vignette écrite.".into();
+            return;
+        };
+        // Ce qui part est aussi ce qui reste écrit à côté de la vidéo.
+        self.youtube.marquer();
+        if let Some(e) = self.youtube.ecrire_si_besoin(true) {
+            self.message = e;
+        }
+        match youtube::envoyer(&montee, &p.video, &self.youtube.description) {
+            Ok(e) => {
+                self.message = format!("Envoi de {}…", montee.file_name().unwrap_or_default().to_string_lossy());
+                self.envoi = Some(e);
+            }
+            Err(e) => self.message = e,
+        }
+    }
+
     /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera.
     fn filmer(&mut self) {
         let programme = std::env::var_os("MONTEUR_VERDIERCAM")
@@ -469,6 +500,7 @@ impl Monteur {
                 );
                 let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().clone();
                 self.vignette.charger(&video, &fiche, p.infos.duree);
+                self.youtube.charger(&video);
                 self.bande_neuve = true;
                 self.prise = Some(p);
             }
@@ -615,7 +647,7 @@ impl Monteur {
             && let Some(p) = &mut self.prise
         {
             p.preparer();
-            self.message = "Préparation en cours : mouvement de l'image, gestes, silences…".into();
+            self.message = "Préparation en cours : voix, mouvement de l'image, gestes, silences…".into();
         }
         ui.same_line();
         let peut_rendre = self.prise.is_some() && self.rendu.is_none();
@@ -995,6 +1027,23 @@ impl Application for Monteur {
                 self.a_changer = Some(self.dossier.chemin.clone());
             }
         }
+        if std::mem::take(&mut self.youtube.demande) && self.envoi.is_none() {
+            self.envoyer();
+        }
+        if let Some(e) = self.youtube.ecrire_si_besoin(false) {
+            self.message = e;
+        }
+        if let Some(fin) = self.envoi.as_mut().and_then(|e| e.suivre()) {
+            self.envoi = None;
+            self.message = fin.message;
+            if let Some(id) = fin.youtube_id {
+                let f = self.fiches.fiches.entry(noyau::videos::cle(&fin.video)).or_default();
+                f.youtube_id = id;
+                f.envoyee_le = noyau::maintenant();
+                self.ecrire_fiches();
+                self.a_changer = Some(self.dossier.chemin.clone());
+            }
+        }
         if let Some(fini) = self.rendu.as_ref().and_then(|r| r.fin.try_recv().ok()) {
             if let Some(r) = self.rendu.take() {
                 let duree = r.debut.elapsed().as_secs_f64();
@@ -1161,7 +1210,13 @@ impl Application for Monteur {
                     && let Some(p) = &mut self.prise
                 {
                     p.preparer();
-                    self.message = "Préparation en cours : mouvement de l'image, gestes, silences…".into();
+                    self.message = "Préparation en cours : voix, mouvement de l'image, gestes, silences…".into();
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Refaire les sous-titres", false, pret)
+                    && let Some(p) = &mut self.prise
+                {
+                    p.refaire_les_sous_titres();
+                    self.message = "Transcription de la voix (whisper, sur ce poste)…".into();
                 }
                 m.end();
             }
@@ -1226,6 +1281,18 @@ impl Application for Monteur {
             }
         });
 
+        if std::mem::take(&mut self.montrer_youtube) {
+            ui.set_window_focus(Some("YouTube###youtube"));
+        }
+        ui.window(&panneaux.youtube).build(|| {
+            let Some(p) = &self.prise else {
+                ui.text_colored(charte::c(charte::TEXT_2), "Choisir une prise à gauche.");
+                return;
+            };
+            let video = p.video.clone();
+            let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().clone();
+            self.youtube.dessiner(ui, &fiche, &video, self.envoi.as_ref());
+        });
         // Hors de l'onglet : il n'est dessiné que s'il est devant.
         if std::mem::take(&mut self.vignette.ecrite) {
             self.ecrire_fiches();
@@ -1272,6 +1339,9 @@ impl Application for Monteur {
     }
 
     fn shutdown(&mut self, _c: &mut dear_app::ShutdownContext<'_>) -> Result<(), RunError> {
+        if let Some(e) = self.youtube.ecrire_si_besoin(true) {
+            eprintln!("{e}");
+        }
         // Un rendu en cours s'arrête proprement : pas de ffmpeg orphelin, pas de fichier partiel.
         if let Some(r) = self.rendu.take() {
             r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);

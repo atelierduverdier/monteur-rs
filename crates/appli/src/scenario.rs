@@ -2,7 +2,8 @@
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
-//! `nouveau <nom>`, `enregistrer`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `nouveau <nom>`, `enregistrer`, `proposer`, `envoyer` (faux programme seulement),
+//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -106,6 +107,26 @@ impl Scenario {
                     }
                 }
                 "enregistrer" => m.enregistrer(),
+                // Jamais d'envoi réel depuis un essai : il faut le faux programme.
+                "envoyer" => {
+                    if std::env::var_os("MONTEUR_YOUTUBE_ENVOI").is_some() {
+                        m.envoyer();
+                        self.jusqua = Some(Instant::now() + Duration::from_secs(2));
+                        return false;
+                    }
+                    eprintln!("scénario : envoi refusé sans MONTEUR_YOUTUBE_ENVOI");
+                }
+                "onglet_youtube" => m.montrer_youtube = true,
+                "proposer" => {
+                    if let Some(p) = &m.prise {
+                        let f = m.fiches.fiches.entry(noyau::videos::cle(&p.video)).or_default();
+                        m.youtube.description = noyau::description::description_proposee(f);
+                    }
+                }
+                "refaire_sous_titres" => {
+                    m.prise.iter_mut().for_each(|p| p.refaire_les_sous_titres());
+                    return false;
+                }
                 "rendre_en_fond" => {
                     self.sans_attendre = true;
                     m.rendre();

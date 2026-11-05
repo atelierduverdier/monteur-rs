@@ -339,10 +339,17 @@ impl Prise {
         self.modifie();
     }
 
-    /// Lance la préparation du montage en fond (calage, gestes, temps morts).
+    /// Lance la préparation du montage en fond (calage, gestes, temps morts, sous-titres).
     pub fn preparer(&mut self) {
         if self.preparation.is_none() {
-            self.preparation = Some(Preparation::lancer(&self.video, self.montage.clone()));
+            self.preparation = Some(Preparation::lancer(&self.video, self.montage.clone(), false));
+        }
+    }
+
+    /// Lance whisper seul : les sous-titres sont refaits, ceux d'avant remplacés.
+    pub fn refaire_les_sous_titres(&mut self) {
+        if self.preparation.is_none() {
+            self.preparation = Some(Preparation::lancer(&self.video, self.montage.clone(), true));
         }
     }
 }
@@ -392,11 +399,11 @@ pub struct Preparation {
 }
 
 impl Preparation {
-    fn lancer(video: &Path, montage: Montage) -> Self {
+    fn lancer(video: &Path, montage: Montage, sous_titres_seuls: bool) -> Self {
         let (envoi, resultat) = mpsc::channel();
         let video = video.to_path_buf();
         std::thread::spawn(move || {
-            let _ = envoi.send(preparer(&video, montage));
+            let _ = envoi.send(if sous_titres_seuls { refaire_sous_titres(&video, montage) } else { preparer(&video, montage) });
         });
         Self { debut: Instant::now(), resultat }
     }
@@ -406,9 +413,67 @@ fn lancer(commande: Vec<String>) -> Result<std::process::Output, String> {
     std::process::Command::new(&commande[0]).args(&commande[1..]).output().map_err(|e| format!("{} : {e}", commande[0]))
 }
 
+/// whisper-cli, avec les modèles de la dictée, sur le son de la vidéo. `None` si whisper n'est pas
+/// sur ce poste.
+fn transcrire(video: &Path) -> Result<Option<Vec<noyau::montage::SousTitre>>, String> {
+    use noyau::sous_titres as st;
+    let modeles = st::modeles();
+    let present = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("whisper-cli").is_file()));
+    if !present || !modeles.join("ggml-large-v3-turbo.bin").exists() {
+        return Ok(None);
+    }
+    let dossier = std::env::temp_dir().join(format!("monteur2-whisper-{}", std::process::id()));
+    std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
+    let (wav, base) = (dossier.join("son.wav"), dossier.join("voix"));
+    let resultat = (|| {
+        let son = lancer(st::commande_son_16k(video, &wav))?;
+        if !son.status.success() {
+            return Err("le son n'a pas pu être extrait".to_string());
+        }
+        let w = lancer(st::commande_whisper(&wav, &base, "fr", &modeles))?;
+        if !w.status.success() {
+            return Err(String::from_utf8_lossy(&w.stderr).lines().last().unwrap_or("whisper-cli").to_string());
+        }
+        let texte = std::fs::read_to_string(base.with_extension("json")).map_err(|e| e.to_string())?;
+        let json = serde_json::from_str(&texte).map_err(|e| e.to_string())?;
+        Ok(Some(st::lire_whisper(&json)))
+    })();
+    let _ = std::fs::remove_dir_all(&dossier);
+    resultat
+}
+
+fn refaire_sous_titres(video: &Path, mut m: Montage) -> Result<(Montage, String), String> {
+    match transcrire(video)? {
+        Some(sous_titres) => {
+            m.sous_titres = sous_titres;
+            noyau::analyse::caler_etiquettes_sur_la_voix(&mut m);
+            let n = m.sous_titres.len();
+            Ok((m, format!("{n} sous-titre(s) : à relire.")))
+        }
+        None => Err("whisper-cli ou son modèle est introuvable sur ce poste".into()),
+    }
+}
+
 fn preparer(video: &Path, mut m: Montage) -> Result<(Montage, String), String> {
     use noyau::{analyse, journal, temps_morts};
-    let gris = lancer(analyse::commande_image_grise(video))?;
+    // Whisper tourne à côté du reste. Il ne remplace jamais des sous-titres déjà là : ils ont pu
+    // être corrigés à la main (« Refaire les sous-titres » le fait exprès).
+    let (image, whisper) = std::thread::scope(|portee| {
+        let w = (m.sous_titres.is_empty()).then(|| portee.spawn(|| transcrire(video)));
+        let image = lancer(analyse::commande_image_grise(video));
+        (image, w.map(|t| t.join().unwrap_or_else(|_| Err("whisper s'est arrêté".into()))))
+    });
+    let mut note_whisper = None;
+    match whisper {
+        Some(Ok(Some(sous_titres))) => {
+            note_whisper = Some(format!("{} sous-titre(s) à relire", sous_titres.len()));
+            m.sous_titres = sous_titres;
+        }
+        Some(Ok(None)) => note_whisper = Some("pas de sous-titres : whisper-cli introuvable".to_string()),
+        Some(Err(e)) => note_whisper = Some(format!("sous-titres impossibles : {e}")),
+        None => {}
+    }
+    let gris = image?;
     let mouvement = analyse::mouvement_image(&gris.stdout);
     let gestes = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -441,6 +506,7 @@ fn preparer(video: &Path, mut m: Montage) -> Result<(Montage, String), String> {
     m.coupes.retain(|c| c.origine != "temps mort");
     m.coupes.extend(nouvelles);
     m.trier();
+    compte.extend(note_whisper);
     compte.insert(
         0,
         format!(
