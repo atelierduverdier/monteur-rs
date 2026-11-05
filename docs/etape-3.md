@@ -20,7 +20,7 @@
   passages coupés se sautent comme au rendu. Mesuré : saut de la tête en 21 à 60 ms, image à
   0,4/255 de celle de ffmpeg, image calée sur l'horloge à 17 ms près, 3,03 s lues en 3 s.
 - **Touches** : Espace (lire), K (arrêter), J / L (±5 s), ← / → (une image, Maj : 1 s),
-  Début / Fin, C puis C (une coupe), Échap, Suppr, Ctrl+Z, Ctrl+Maj+Z, Ctrl+S.
+  Début / Fin, C puis C (une coupe), Z (un zoom), Échap, Suppr, Ctrl+Z, Ctrl+Maj+Z, Ctrl+S.
 - **Préparer le montage** (menu Montage) : en fond, la même chaîne que le Monteur 1 (calage,
   gestes, temps morts). Sur une copie de la prise du 02/11 à 10:06 : 10 zooms, 6 étiquettes,
   gestes calés de −0,35 s — ce que le Monteur 1 trouve.
@@ -29,6 +29,21 @@
 - **Un seul Monteur à la fois** : le verrou est celui du Monteur 1, au même format. Essayé dans
   les deux sens : le Monteur 2 ouvert, le Monteur 1 ne prend pas le verrou ; le Monteur 1 ouvert,
   le Monteur 2 dit « Le Monteur est déjà ouvert. ».
+
+## Remarques de Christophe, vidéo du 05/11/2026
+
+Faites : liste des prises lisible (miniature, date, durée, état en pastille à droite) ; bouton
+« Préparer le montage » en vue, dans un ruban ; boutons de lecture dessinés (début, −5 s, lire ou
+pause, stop, +5 s, fin) ; le cadre du zoom se trace dans la visionneuse (`zoom_trace`, contrôlé) :
+glisser dedans le déplace, un coin le retaille, tracer à côté en fait un autre ; « Nouveau zoom » (Z)
+en pose un à la tête. Vus en plus sur la vidéo : les noms des champs de l'inspecteur étaient
+coupés ; choisir un zoom loin de la tête montrait une autre image (la tête y vient maintenant) ; un
+grossissement tapé sous 1 aurait arrêté le programme au déplacement du cadre.
+
+Stop arrête et revient d'où la lecture est partie : en montant, on réécoute le même passage.
+
+À décider avec lui : un dossier par projet, l'insertion d'autres vidéos. À faire : la vignette
+(étape 6).
 
 ## Essayer sans souris
 

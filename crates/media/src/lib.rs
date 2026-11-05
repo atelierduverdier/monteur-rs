@@ -16,6 +16,8 @@ pub struct Lecteur {
     depart: Option<(Instant, f64)>,
     arret: f64,
     en_lecture: bool,
+    /// D'où la lecture est partie : Stop y revient.
+    parti_de: f64,
     pub duree: f64,
 }
 
@@ -25,7 +27,7 @@ impl Lecteur {
         taire_les_avertissements();
         let video = video::Video::ouvrir(chemin)?;
         let son = if avec_son { son::Son::ouvrir(chemin)? } else { None };
-        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, duree })
+        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, parti_de: 0.0, duree })
     }
 
     pub fn en_lecture(&self) -> bool {
@@ -52,6 +54,7 @@ impl Lecteur {
             self.aller_a(0.0);
         }
         self.en_lecture = true;
+        self.parti_de = self.arret;
         self.depart = Some((Instant::now(), self.arret));
         if let Some(s) = &mut self.son {
             s.lire();
@@ -69,6 +72,12 @@ impl Lecteur {
             s.aller_a(self.arret);
         }
         self.video.aller_a(self.arret);
+    }
+
+    /// Arrête et revient d'où la lecture est partie : on réécoute le même passage en montant.
+    pub fn stop(&mut self) {
+        self.arreter();
+        self.aller_a(self.parti_de);
     }
 
     pub fn basculer(&mut self) {

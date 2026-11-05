@@ -294,6 +294,10 @@ impl Ligne {
             } else if let Some((ch, g, d)) = sous_souris {
                 prise.choix = Some(ch);
                 let (a0, b0) = intervalle(&prise.montage, ch).unwrap_or((0.0, 0.0));
+                // Un zoom choisi se règle sur son image : la tête y vient si elle est ailleurs.
+                if ch.sorte == Sorte::Zoom && !prise.lecteur.en_lecture() && !(a0..=b0).contains(&tete) {
+                    prise.lecteur.aller_a((a0 + b0) / 2.0);
+                }
                 prise.retenir();
                 Some(if g || d { Main::Bord { choix: ch, gauche: g } } else { Main::Deplacer { choix: ch, depart_t: t_souris, a0, b0 } })
             } else {

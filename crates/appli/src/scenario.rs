@@ -1,7 +1,7 @@
 //! Un déroulé d'essai, pour essayer la fenêtre sans souris (sous Wayland, rien ne la pilote du
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
-//! coupe <rang>`, `preparer` (attend la fin), `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -64,6 +64,16 @@ impl Scenario {
                     m.prise.iter_mut().for_each(|p| p.preparer());
                     return false;
                 }
+                "zoom" => m.prise.iter_mut().for_each(|p| p.nouveau_zoom(nombre(1))),
+                "tracer" => m.prise.iter_mut().for_each(|p| {
+                    if let Some(Choix { sorte: Sorte::Zoom, indice }) = p.choix {
+                        p.retenir();
+                        let z = &mut p.montage.zooms[indice];
+                        (z.facteur, z.cx, z.cy) = crate::etat::zoom_trace(nombre(1), nombre(2), nombre(3), nombre(4));
+                        p.modifie();
+                    }
+                }),
+                "stop" => m.prise.iter_mut().for_each(|p| p.lecteur.stop()),
                 "couper" => m.prise.iter_mut().for_each(|p| p.ajouter_coupe(nombre(1), nombre(2))),
                 "defaire" => m.prise.iter_mut().for_each(|p| p.defaire()),
                 "capture" => {

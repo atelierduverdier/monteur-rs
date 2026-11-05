@@ -6,6 +6,7 @@
 
 mod etat;
 mod ligne;
+mod miniatures;
 mod scenario;
 mod vue;
 
@@ -58,6 +59,83 @@ impl Panneaux {
     }
 }
 
+/// Ce que la souris tient dans la visionneuse quand un zoom est choisi.
+#[derive(Clone, Copy)]
+enum Saisie {
+    /// Le cadre entier : départ de la souris, centre de départ.
+    Deplacer([f32; 2], f64, f64),
+    /// Un coin, ou un cadre neuf qu'on trace : le point fixe, en fractions de l'image.
+    Tracer(f64, f64),
+}
+
+/// Les boutons de lecture, dessinés (Inter n'a pas ces signes en assez net).
+#[derive(Clone, Copy)]
+enum Forme {
+    Lire,
+    Pause,
+    Stop,
+    Debut,
+    Fin,
+    Reculer,
+    Avancer,
+}
+
+/// Un bouton carré à icône ; rend vrai s'il est cliqué.
+fn bouton_forme(ui: &Ui, id: &str, forme: Forme, primaire: bool, aide: &str) -> bool {
+    let couleurs = primaire.then(|| {
+        (
+            ui.push_style_color(StyleColor::Button, charte::c(charte::ACCENT)),
+            ui.push_style_color(StyleColor::ButtonHovered, charte::c(charte::ACCENT_HOVER)),
+            ui.push_style_color(StyleColor::ButtonActive, charte::c(charte::ACCENT_PRESSED)),
+        )
+    });
+    let clique = ui.button_with_size(format!("##{id}"), [if primaire { 46.0 } else { 34.0 }, 28.0]);
+    if let Some((a, b, c)) = couleurs {
+        c.pop();
+        b.pop();
+        a.pop();
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(aide);
+    }
+    let (a, b) = (ui.item_rect_min(), ui.item_rect_max());
+    let (cx, cy) = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
+    let encre = charte::c(if primaire { charte::ENCRE_SUR_ACCENT } else { charte::TEXT });
+    let dl = ui.get_window_draw_list();
+    let plein = |x0: f32, y0: f32, x1: f32, y1: f32| dl.add_rect([cx + x0, cy + y0], [cx + x1, cy + y1], encre).filled(true).build();
+    let fleche = |x: f32, sens: f32| {
+        dl.add_triangle([cx + x - 5.0 * sens, cy - 6.0], [cx + x - 5.0 * sens, cy + 6.0], [cx + x + 5.0 * sens, cy], encre).filled(true).build()
+    };
+    match forme {
+        Forme::Lire => fleche(1.0, 1.0),
+        Forme::Pause => {
+            plein(-5.0, -6.0, -1.5, 6.0);
+            plein(1.5, -6.0, 5.0, 6.0);
+        }
+        Forme::Stop => plein(-5.0, -5.0, 5.0, 5.0),
+        Forme::Debut => {
+            plein(-7.0, -6.0, -5.0, 6.0);
+            fleche(0.0, -1.0);
+        }
+        Forme::Fin => {
+            plein(5.0, -6.0, 7.0, 6.0);
+            fleche(0.0, 1.0);
+        }
+        Forme::Reculer => {
+            fleche(-4.0, -1.0);
+            fleche(4.0, -1.0);
+        }
+        Forme::Avancer => {
+            fleche(-4.0, 1.0);
+            fleche(4.0, 1.0);
+        }
+    }
+    clique
+}
+
+/// La hauteur du ruban, sous la barre de menus.
+const RUBAN: f32 = 44.0;
+
 struct Monteur {
     panneaux: Panneaux,
     dossier: Dossier,
@@ -70,8 +148,9 @@ struct Monteur {
     mono: Option<FontId>,
     /// Une prise à ouvrir au tour suivant (le clic arrive pendant le dessin de la liste).
     a_ouvrir: Option<PathBuf>,
-    /// Le réglage d'un zoom à l'arrêt : la souris glisse le cadre.
-    cadre_saisi: Option<([f32; 2], f64, f64)>,
+    /// Le réglage d'un zoom à l'arrêt : ce que la souris tient dans la visionneuse.
+    cadre_saisi: Option<Saisie>,
+    miniatures: miniatures::Miniatures,
     /// Un déroulé d'essai (`MONTEUR2_SCENARIO`), sinon rien.
     scenario: Option<scenario::Scenario>,
 }
@@ -97,6 +176,7 @@ impl Monteur {
         let fiches = Fiches::lire(&chemin_fiches()).unwrap_or_default();
         let dossier = Dossier::lire(&dossier_de_depart(&fiches), &fiches);
         let message = format!("{} prise(s) dans {}", dossier.prises.len(), dossier.chemin.display());
+        let miniatures = miniatures::Miniatures::lancer(dossier.prises.iter().map(|p| p.0.clone()).collect());
         Self {
             panneaux: Panneaux::new(),
             dossier,
@@ -109,6 +189,7 @@ impl Monteur {
             mono: None,
             a_ouvrir: None,
             cadre_saisi: None,
+            miniatures,
             scenario: scenario::Scenario::depuis_l_environnement(),
         }
     }
@@ -155,6 +236,10 @@ impl Monteur {
         if ui.is_key_pressed(Key::K) {
             p.lecteur.arreter();
         }
+        if ui.is_key_pressed(Key::Z) && !ctrl {
+            p.nouveau_zoom(t);
+            self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
+        }
         if ui.is_key_pressed(Key::J) {
             p.lecteur.aller_a(t - 5.0);
         }
@@ -196,17 +281,100 @@ impl Monteur {
         }
     }
 
-    fn panneau_prises(&mut self, ui: &Ui) {
+    fn panneau_prises(&mut self, ui: &Ui, textures: &[Option<TextureId>]) {
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
-        for (chemin, etat) in &self.dossier.prises {
-            let nom = chemin.file_stem().unwrap_or_default().to_string_lossy();
-            if ui.selectable_config(&*nom).selected(ouverte.as_ref() == Some(chemin)).build() {
+        const HAUT: f32 = 58.0;
+        let (mh, ml) = (46.0, 46.0 * miniatures::LARGEUR as f32 / miniatures::HAUTEUR as f32);
+        for (i, (chemin, etat)) in self.dossier.prises.iter().enumerate() {
+            if ui.selectable_config(format!("##prise{i}")).selected(ouverte.as_ref() == Some(chemin)).size([0.0, HAUT]).build() {
                 self.a_ouvrir = Some(chemin.clone());
             }
-            ui.text_colored(charte::c(charte::TEXT_2), format!("   {etat}"));
+            let (a, b) = (ui.item_rect_min(), ui.item_rect_max());
+            let dl = ui.get_window_draw_list();
+            let (x, y) = (a[0] + 4.0, a[1] + (HAUT - mh) / 2.0);
+            match textures.get(i).copied().flatten() {
+                Some(t) => dl.add_image(t, [x, y], [x + ml, y + mh], [0.0, 0.0], [1.0, 1.0], [1.0, 1.0, 1.0, 1.0]),
+                None => dl.add_rect([x, y], [x + ml, y + mh], charte::c(charte::BG_INPUT)).filled(true).build(),
+            }
+            let nom = chemin.file_stem().unwrap_or_default().to_string_lossy();
+            let tx = x + ml + 8.0;
+            dl.add_text([tx, a[1] + 8.0], charte::c(charte::TEXT), miniatures::nom_lisible(&nom));
+            if let Some(d) = self.miniatures.duree(i) {
+                dl.add_text([tx, a[1] + 31.0], charte::c(charte::UNIT), temps(d).split(',').next().unwrap_or(""));
+            }
+            // L'état à droite, en pastille, de la couleur de la maquette.
+            let (fond, encre) = match *etat {
+                "montée" => (charte::vec(charte::PISTE_ZOOM, 0.25), 0x8DB5FF),
+                "vignette" => (charte::vec(charte::ALERTE, 0.2), 0xFFD54F),
+                "envoyée" => (charte::vec(charte::SUCCES, 0.22), charte::SUCCES_TEXTE),
+                _ => (charte::c(charte::BG_INPUT), charte::TEXT_2),
+            };
+            let l = ui.calc_text_size(etat)[0] + 14.0;
+            let (px, py) = (b[0] - l - 6.0, a[1] + 30.0);
+            dl.add_rect([px, py], [px + l, py + 19.0], fond).filled(true).rounding(9.0).build();
+            dl.add_text([px + 7.0, py + 1.0], charte::c(encre), etat);
         }
         if self.dossier.prises.is_empty() {
             ui.text_wrapped(format!("Aucune vidéo dans {}", self.dossier.chemin.display()));
+        }
+    }
+
+    /// Sous la barre de menus : ce qu'on fait le plus souvent, en vue.
+    fn ruban(&mut self, ui: &Ui) {
+        let pret = self.prise.as_ref().is_some_and(|p| p.preparation.is_none());
+        let primaire = (
+            ui.push_style_color(StyleColor::Button, charte::c(charte::ACCENT)),
+            ui.push_style_color(StyleColor::ButtonHovered, charte::c(charte::ACCENT_HOVER)),
+            ui.push_style_color(StyleColor::ButtonActive, charte::c(charte::ACCENT_PRESSED)),
+            ui.push_style_color(StyleColor::Text, charte::c(charte::ENCRE_SUR_ACCENT)),
+        );
+        let preparer = {
+            let _f = self.gras.map(|f| ui.push_font(f));
+            ui.button_with_size("Préparer le montage", [170.0, 30.0])
+        };
+        primaire.3.pop();
+        primaire.2.pop();
+        primaire.1.pop();
+        primaire.0.pop();
+        if preparer
+            && pret
+            && let Some(p) = &mut self.prise
+        {
+            p.preparer();
+            self.message = "Préparation en cours : mouvement de l'image, gestes, silences…".into();
+        }
+        let Some(p) = &mut self.prise else { return };
+        let t = p.lecteur.position();
+        ui.same_line();
+        ui.dummy([12.0, 1.0]);
+        ui.same_line();
+        if ui.button_with_size("Annuler", [0.0, 30.0]) {
+            p.defaire();
+        }
+        ui.same_line();
+        if ui.button_with_size("Rétablir", [0.0, 30.0]) {
+            p.refaire();
+        }
+        ui.same_line();
+        ui.dummy([12.0, 1.0]);
+        ui.same_line();
+        if ui.button_with_size("Couper (C)", [0.0, 30.0]) {
+            self.message = p.marquer_coupe(t);
+        }
+        ui.same_line();
+        if ui.button_with_size("Couper avant", [0.0, 30.0]) {
+            p.ajouter_coupe(0.0, t);
+        }
+        ui.same_line();
+        if ui.button_with_size("Couper après", [0.0, 30.0]) {
+            p.ajouter_coupe(t, p.montage.duree);
+        }
+        ui.same_line();
+        ui.dummy([12.0, 1.0]);
+        ui.same_line();
+        if ui.button_with_size("Nouveau zoom (Z)", [0.0, 30.0]) {
+            p.nouveau_zoom(t);
+            self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
         }
     }
 
@@ -222,8 +390,8 @@ impl Monteur {
             ui.set_cursor_pos([x0, ui.cursor_pos()[1]]);
             let coin = ui.cursor_screen_pos();
             ui.image(id, taille);
-            // Un zoom choisi, à l'arrêt : l'image entière et son cadre orange, qu'on glisse
-            // (molette : grossir).
+            // Un zoom choisi, à l'arrêt : l'image entière et son cadre orange. Glisser dedans le
+            // déplace ; un coin le retaille ; tracer à côté en fait un autre ; la molette grossit.
             if let Some(Choix { sorte: Sorte::Zoom, indice }) = p.choix
                 && !p.lecteur.en_lecture()
                 && let Some(z) = p.montage.zooms.get(indice).cloned()
@@ -231,12 +399,32 @@ impl Monteur {
                 let [x, y, l, h] = noyau::analyse::cadre_zoom(z.facteur, z.cx, z.cy);
                 let a = [coin[0] + x as f32 * taille[0], coin[1] + y as f32 * taille[1]];
                 let b = [a[0] + l as f32 * taille[0], a[1] + h as f32 * taille[1]];
-                ui.get_window_draw_list().add_rect(a, b, charte::c(charte::ACCENT)).thickness(3.0).build();
+                let dl = ui.get_window_draw_list();
+                dl.add_rect(a, b, charte::c(charte::ACCENT)).thickness(3.0).build();
+                let coins = [[a[0], a[1]], [b[0], a[1]], [a[0], b[1]], [b[0], b[1]]];
+                for c in coins {
+                    dl.add_rect([c[0] - 5.0, c[1] - 5.0], [c[0] + 5.0, c[1] + 5.0], charte::c(charte::ACCENT)).filled(true).build();
+                }
                 let souris = ui.io().mouse_pos();
+                let (fx, fy) = (((souris[0] - coin[0]) / taille[0]) as f64, ((souris[1] - coin[1]) / taille[1]) as f64);
+                let (fx, fy) = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
+                let proche = coins.iter().position(|c| (c[0] - souris[0]).abs() <= 10.0 && (c[1] - souris[1]).abs() <= 10.0);
                 if ui.is_item_hovered() {
+                    if proche.is_some() {
+                        ui.set_mouse_cursor(Some(MouseCursor::ResizeNWSE));
+                    }
                     if ui.is_mouse_clicked(MouseButton::Left) {
                         p.retenir();
-                        self.cadre_saisi = Some((souris, z.cx, z.cy));
+                        let dedans = souris[0] >= a[0] && souris[0] <= b[0] && souris[1] >= a[1] && souris[1] <= b[1];
+                        self.cadre_saisi = Some(match proche {
+                            // Le coin opposé reste en place.
+                            Some(i) => {
+                                let o = coins[3 - i];
+                                Saisie::Tracer(((o[0] - coin[0]) / taille[0]) as f64, ((o[1] - coin[1]) / taille[1]) as f64)
+                            }
+                            None if dedans => Saisie::Deplacer(souris, x + l / 2.0, y + h / 2.0),
+                            None => Saisie::Tracer(fx, fy),
+                        });
                     }
                     let m = ui.io().mouse_wheel();
                     if m != 0.0 {
@@ -248,16 +436,18 @@ impl Monteur {
                         p.modifie();
                     }
                 }
-                if let Some((depart, cx0, cy0)) = self.cadre_saisi {
-                    if ui.is_mouse_down(MouseButton::Left)
-                        && let Some(zz) = p.montage.zooms.get_mut(indice)
-                    {
-                        zz.cx = noyau::arrondi::arrondi((cx0 + ((souris[0] - depart[0]) / taille[0]) as f64).clamp(0.0, 1.0), 4);
-                        zz.cy = noyau::arrondi::arrondi((cy0 + ((souris[1] - depart[1]) / taille[1]) as f64).clamp(0.0, 1.0), 4);
-                        p.modifie();
-                    } else {
-                        self.cadre_saisi = None;
+                if !ui.is_mouse_down(MouseButton::Left) {
+                    self.cadre_saisi = None;
+                }
+                if let (Some(saisie), Some(zz)) = (self.cadre_saisi, p.montage.zooms.get_mut(indice)) {
+                    match saisie {
+                        Saisie::Deplacer(depart, cx0, cy0) => {
+                            zz.cx = etat::centre_borne(cx0 + ((souris[0] - depart[0]) / taille[0]) as f64, zz.facteur);
+                            zz.cy = etat::centre_borne(cy0 + ((souris[1] - depart[1]) / taille[1]) as f64, zz.facteur);
+                        }
+                        Saisie::Tracer(ax, ay) => (zz.facteur, zz.cx, zz.cy) = etat::zoom_trace(ax, ay, fx, fy),
                     }
+                    p.modifie();
                 }
             }
         }
@@ -270,26 +460,43 @@ impl Monteur {
             ui.text_colored(charte::c(charte::UNIT), format!("/ {}", temps(p.montage.duree)));
         }
         ui.same_line();
-        if ui.button(if p.lecteur.en_lecture() { "Arrêter" } else { "Lire" }) {
+        ui.dummy([10.0, 1.0]);
+        ui.same_line();
+        if bouton_forme(ui, "debut", Forme::Debut, false, "Au début") {
+            p.lecteur.aller_a(0.0);
+        }
+        ui.same_line();
+        if bouton_forme(ui, "reculer", Forme::Reculer, false, "5 s en arrière (J)") {
+            p.lecteur.aller_a(t - 5.0);
+        }
+        ui.same_line();
+        let en_lecture = p.lecteur.en_lecture();
+        let forme = if en_lecture { Forme::Pause } else { Forme::Lire };
+        if bouton_forme(ui, "lire", forme, true, if en_lecture { "Pause (Espace)" } else { "Lire (Espace)" }) {
             p.lecteur.basculer();
         }
         ui.same_line();
-        if ui.button("Couper avant") {
-            p.ajouter_coupe(0.0, t);
+        if bouton_forme(ui, "stop", Forme::Stop, false, "Stop : revient d'où la lecture est partie") {
+            p.lecteur.stop();
         }
         ui.same_line();
-        if ui.button("Couper après") {
-            p.ajouter_coupe(t, p.montage.duree);
+        if bouton_forme(ui, "avancer", Forme::Avancer, false, "5 s en avant (L)") {
+            p.lecteur.aller_a(t + 5.0);
         }
         ui.same_line();
-        ui.text_colored(
-            charte::c(charte::UNIT),
-            format!("montée {} · C : couper · Espace : lire", temps(p.montage.duree_montee())),
-        );
+        if bouton_forme(ui, "fin", Forme::Fin, false, "À la fin") {
+            p.lecteur.aller_a(p.montage.duree);
+        }
+        ui.same_line();
+        ui.dummy([10.0, 1.0]);
+        ui.same_line();
+        ui.text_colored(charte::c(charte::UNIT), format!("montée {}", temps(p.montage.duree_montee())));
     }
 
     fn panneau_inspecteur(&mut self, ui: &Ui) {
         let Some(p) = &mut self.prise else { return };
+        // Assez de place à droite des champs pour leur nom entier.
+        let _largeur = ui.push_item_width(ui.content_region_avail()[0] - 150.0);
         let gras = self.gras;
         let titre = |ui: &Ui, t: &str| {
             let _f = gras.map(|f| ui.push_font(f));
@@ -319,7 +526,7 @@ impl Monteur {
                 change |= nombre(ui, "Centre x (0-1)", &mut z.cx, 0.01);
                 change |= nombre(ui, "Centre y (0-1)", &mut z.cy, 0.01);
                 ui.text_colored(charte::c(charte::UNIT), format!("origine : {}  {}", z.origine, z.libelle));
-                ui.text_wrapped("À l'arrêt, le cadre orange de la visionneuse se glisse ; la molette grossit.");
+                ui.text_wrapped("Dans la visionneuse, à l'arrêt : glisser dans le cadre le déplace, un coin le retaille, tracer à côté en fait un autre, la molette grossit.");
             }
             Some(Choix { sorte: Sorte::Etiquette, indice }) if indice < p.montage.etiquettes.len() => {
                 titre(ui, "Étiquette");
@@ -411,6 +618,7 @@ impl Application for Monteur {
 
     fn gpu_lost(&mut self, g: &mut GpuContext<'_>) -> Result<(), RunError> {
         self.vue.perdre(g.gpu());
+        self.miniatures.liberer(g.gpu());
         Ok(())
     }
 
@@ -448,14 +656,18 @@ impl Application for Monteur {
             Some(p) => self.vue.preparer(context.gpu(), p, &self.polices, sans_zoom),
             None => None,
         };
+        self.miniatures.recevoir(context.gpu());
+        let textures = self.miniatures.textures(context.gpu());
         let ui = context.ui();
         self.touches(ui);
 
+        let mut relire = false;
         if let Some(barre) = ui.begin_main_menu_bar() {
             if let Some(m) = ui.begin_menu("Fichier") {
                 if ui.menu_item("Relire le dossier") {
                     let fiches = Fiches::lire(&chemin_fiches()).unwrap_or_default();
                     self.dossier = Dossier::lire(&self.dossier.chemin.clone(), &fiches);
+                    relire = true;
                 }
                 m.end();
             }
@@ -495,7 +707,13 @@ impl Application for Monteur {
         let vp = ui.main_viewport();
         ui.set_next_window_viewport(vp.id());
         let (pos, mut taille) = (vp.work_pos(), vp.work_size());
-        taille[1] -= 24.0;
+        ui.window("ruban")
+            .flags(WindowFlags::NO_DECORATION | WindowFlags::NO_MOVE | WindowFlags::NO_DOCKING | WindowFlags::NO_SAVED_SETTINGS)
+            .position(pos, Condition::Always)
+            .size([taille[0], RUBAN], Condition::Always)
+            .build(|| self.ruban(ui));
+        let pos = [pos[0], pos[1] + RUBAN];
+        taille[1] -= 24.0 + RUBAN;
         let arrondi = ui.push_style_var(StyleVar::WindowRounding(0.0));
         let bord = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
         let marge = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
@@ -523,7 +741,7 @@ impl Application for Monteur {
         resultat.map_err(|e| RunError::application(ApplicationStage::Frame, e))?;
 
         let panneaux = Panneaux::new();
-        ui.window(&panneaux.prises).build(|| self.panneau_prises(ui));
+        ui.window(&panneaux.prises).build(|| self.panneau_prises(ui, &textures));
         ui.window(&panneaux.visionneuse).build(|| self.panneau_visionneuse(ui, image));
         ui.window(&panneaux.inspecteur).build(|| self.panneau_inspecteur(ui));
         ui.window(&panneaux.ligne).build(|| {
@@ -548,6 +766,10 @@ impl Application for Monteur {
                     ui.text_colored(charte::c(charte::UNIT), format!("image peinte en {:.1} ms · {:.0} i/s", self.vue.dernier_ms, ui.io().framerate()));
                 }
             });
+        if relire {
+            self.miniatures.liberer(context.gpu());
+            self.miniatures = miniatures::Miniatures::lancer(self.dossier.prises.iter().map(|p| p.0.clone()).collect());
+        }
         Ok(())
     }
 

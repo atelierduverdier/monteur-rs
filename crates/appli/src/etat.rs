@@ -211,12 +211,46 @@ impl Prise {
         self.modifie();
     }
 
+    /// Un zoom neuf de 3 s à la tête de lecture, choisi : on trace son cadre dans la visionneuse.
+    pub fn nouveau_zoom(&mut self, t: f64) {
+        self.retenir();
+        let debut = noyau::arrondi::arrondi(t, 3);
+        let fin = noyau::arrondi::arrondi((t + 3.0).min(self.montage.duree), 3);
+        self.montage.zooms.push(noyau::montage::Zoom::nouveau(debut, fin));
+        self.montage.trier();
+        let indice = self.montage.zooms.iter().position(|z| z.debut == debut && z.fin == fin);
+        self.choix = indice.map(|indice| Choix { sorte: Sorte::Zoom, indice });
+        self.lecteur.arreter();
+        self.modifie();
+    }
+
     /// Lance la préparation du montage en fond (calage, gestes, temps morts).
     pub fn preparer(&mut self) {
         if self.preparation.is_none() {
             self.preparation = Some(Preparation::lancer(&self.video, self.montage.clone()));
         }
     }
+}
+
+/// Le zoom d'un cadre tracé dans la visionneuse, du point fixe (ax, ay) à la souris (fx, fy), en
+/// fractions de l'image : (facteur, cx, cy). Le cadre garde la forme de l'image : le plus grand des
+/// deux côtés tracés, borné aux grossissements permis, et il reste dans l'image.
+pub fn zoom_trace(ax: f64, ay: f64, fx: f64, fy: f64) -> (f64, f64, f64) {
+    use noyau::arrondi::arrondi;
+    use noyau::montage::{FACTEUR_MAX, FACTEUR_MIN};
+    let (dx, dy) = (fx - ax, fy - ay);
+    let cote = dx.abs().max(dy.abs()).clamp(1.0 / FACTEUR_MAX, 1.0 / FACTEUR_MIN);
+    (
+        arrondi(1.0 / cote, 2),
+        arrondi((ax + cote / 2.0 * dx.signum()).clamp(cote / 2.0, 1.0 - cote / 2.0), 4),
+        arrondi((ay + cote / 2.0 * dy.signum()).clamp(cote / 2.0, 1.0 - cote / 2.0), 4),
+    )
+}
+
+/// Le centre d'un cadre déplacé : il reste dans l'image, quel que soit le grossissement tapé.
+pub fn centre_borne(c: f64, facteur: f64) -> f64 {
+    let demi = 0.5 / facteur.max(1.0);
+    noyau::arrondi::arrondi(c.clamp(demi, 1.0 - demi), 4)
 }
 
 /// « 1:02,4 » : minutes, secondes, dixièmes.
@@ -320,5 +354,36 @@ impl Dossier {
             .filter(|(_, e)| *e != "ignorée")
             .collect();
         Self { chemin: chemin.to_path_buf(), prises }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cadre_trace() {
+        // Un quart de l'image, de haut en bas et de gauche à droite : ×2 centré sur son milieu.
+        assert_eq!(zoom_trace(0.25, 0.25, 0.75, 0.75), (2.0, 0.5, 0.5));
+        // Tracé à l'envers, même cadre.
+        assert_eq!(zoom_trace(0.75, 0.75, 0.25, 0.25), (2.0, 0.5, 0.5));
+        // Le plus grand côté décide : large et plat, le cadre garde la forme de l'image.
+        let (f, cx, cy) = zoom_trace(0.1, 0.5, 0.6, 0.55);
+        assert_eq!((f, cx, cy), (2.0, 0.35, 0.75));
+        // Un simple clic : le plus fort grossissement, jamais plus.
+        assert_eq!(zoom_trace(0.5, 0.5, 0.5, 0.5).0, 4.0);
+        // Toute l'image : le plus faible, et le cadre reste dedans.
+        let (f, cx, cy) = zoom_trace(0.0, 0.0, 1.0, 1.0);
+        assert_eq!(f, 1.15);
+        assert!((0.43..=0.57).contains(&cx) && (0.43..=0.57).contains(&cy));
+    }
+
+    #[test]
+    fn centre_dans_l_image_meme_mal_regle() {
+        assert_eq!(centre_borne(0.1, 2.0), 0.25);
+        assert_eq!(centre_borne(0.9, 2.0), 0.75);
+        // Un grossissement tapé sous 1, ou nul : ni arrêt, ni cadre hors de l'image.
+        assert_eq!(centre_borne(0.9, 0.5), 0.5);
+        assert_eq!(centre_borne(0.2, 0.0), 0.5);
     }
 }
