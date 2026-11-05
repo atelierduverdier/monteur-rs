@@ -209,7 +209,7 @@ impl Prise {
         match self.coupe_commencee.take() {
             None => {
                 self.coupe_commencee = Some(t);
-                "Début de la coupe posé : C à sa fin (Échap abandonne).".into()
+                "Début de la coupe posé : place la tête à sa fin, puis clic droit, Entrée ou C (Échap abandonne).".into()
             }
             Some(a) => {
                 let (debut, fin) = (a.min(t), a.max(t));

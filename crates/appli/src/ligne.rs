@@ -21,6 +21,8 @@ pub struct Ligne {
     /// La largeur de la prise la dernière fois : à l'ouverture d'une autre, tout se remontre.
     duree_vue: f64,
     prise_main: Option<Main>,
+    /// La dernière molette : la vue ne rattrape pas la tête aussitôt, on regardait ailleurs.
+    molette_a: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -183,7 +185,7 @@ fn hachurer(dl: &dear_imgui_rs::DrawListMut<'_>, x0: f32, y0: f32, x1: f32, y1: 
 
 impl Ligne {
     pub fn new() -> Self {
-        Self { debut: 0.0, par_px: 0.05, duree_vue: -1.0, prise_main: None }
+        Self { debut: 0.0, par_px: 0.05, duree_vue: -1.0, prise_main: None, molette_a: None }
     }
 
     fn x_de(&self, t: f64, x0: f32) -> f32 {
@@ -208,7 +210,7 @@ impl Ligne {
         }
         let tete = prise.lecteur.position();
         // En lecture, la tête reste en vue.
-        if prise.lecteur.en_lecture() {
+        if prise.lecteur.en_lecture() && self.molette_a.is_none_or(|m| m.elapsed().as_secs_f64() > 3.0) {
             let fin_vue = self.t_de(x1, x0);
             if tete > fin_vue || tete < self.debut {
                 self.debut = (tete - 0.1 * largeur as f64 * self.par_px).max(0.0);
@@ -471,6 +473,7 @@ impl Ligne {
         // Molette : défiler ; Ctrl : resserrer autour de la souris.
         let molette = ui.io().mouse_wheel();
         if survol && molette != 0.0 {
+            self.molette_a = Some(std::time::Instant::now());
             if ui.io().key_ctrl() {
                 let avant = t_souris;
                 self.par_px = (self.par_px * if molette > 0.0 { 0.8 } else { 1.25 }).clamp(0.002, duree / 200.0 + 0.002);

@@ -18,6 +18,8 @@ pub struct Lecteur {
     en_lecture: bool,
     /// D'où la lecture est partie : Stop y revient.
     parti_de: f64,
+    /// La dernière fois que l'horloge a bougé : position, instant.
+    vu: (f64, Instant),
     /// Un passage accéléré : d'où, et combien de fois plus vite. L'image va `v` fois plus vite
     /// que l'horloge ; le son, lui, continue à sa vitesse, comme au rendu, qui ne garde que le
     /// début du son du passage.
@@ -31,7 +33,7 @@ impl Lecteur {
         taire_les_avertissements();
         let video = video::Video::ouvrir(chemin)?;
         let son = if avec_son { son::Son::ouvrir(chemin)? } else { None };
-        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, parti_de: 0.0, passage: None, duree })
+        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, parti_de: 0.0, vu: (0.0, Instant::now()), passage: None, duree })
     }
 
     pub fn en_lecture(&self) -> bool {
@@ -76,6 +78,7 @@ impl Lecteur {
         }
         self.en_lecture = true;
         self.parti_de = self.arret;
+        self.vu = (self.arret, Instant::now());
         self.depart = Some((Instant::now(), self.arret));
         if let Some(s) = &mut self.son {
             s.lire();
@@ -121,7 +124,13 @@ impl Lecteur {
     /// L'image à montrer maintenant ; à la fin de la prise, la lecture s'arrête.
     pub fn image(&mut self) -> Option<&Image> {
         let t = self.position();
-        if self.en_lecture && t >= self.duree - 0.001 {
+        // Le son finit parfois quelques centièmes avant la durée de la prise : l'horloge se fige
+        // juste avant la fin, et la lecture ne s'arrêterait jamais.
+        if (t - self.vu.0).abs() > 0.05 {
+            self.vu = (t, Instant::now());
+        }
+        let figee = t >= self.duree - 1.0 && self.vu.1.elapsed().as_secs_f64() > 0.3;
+        if self.en_lecture && (t >= self.duree - 0.001 || figee) {
             self.arret = self.duree;
             self.en_lecture = false;
             if let Some(s) = &mut self.son {

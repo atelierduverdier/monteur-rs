@@ -820,6 +820,10 @@ impl Monteur {
             return;
         }
         let Some(p) = &mut self.prise else { return };
+        if p.coupe_commencee.is_some() && (ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter)) {
+            let t = p.lecteur.position();
+            self.message = p.marquer_coupe(t);
+        }
         let (ctrl, maj) = (ui.io().key_ctrl(), ui.io().key_shift());
         let image = 1.0 / 30.0;
         let t = p.lecteur.position();
@@ -1023,7 +1027,6 @@ impl Monteur {
             }
         }
         let Some(p) = &mut self.prise else { return };
-        let t = p.lecteur.position();
         ui.same_line();
         ui.dummy([12.0, 1.0]);
         ui.same_line();
@@ -1034,50 +1037,65 @@ impl Monteur {
         if ui.button_with_size("Rétablir", [0.0, 30.0]) {
             p.refaire();
         }
-        ui.same_line();
-        ui.dummy([12.0, 1.0]);
-        ui.same_line();
-        if ui.button_with_size("Couper (C)", [0.0, 30.0]) {
+    }
+
+    /// Les gestes de montage, au-dessus de la ligne de temps : là où on les fait.
+    fn barre_montage(&mut self, ui: &Ui) {
+        const H: f32 = 26.0;
+        let Some(p) = &mut self.prise else { return };
+        let t = p.lecteur.position();
+        if p.coupe_commencee.is_some() {
+            let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ACCENT));
+            let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::c(charte::ACCENT_HOVER));
+            let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::c(charte::ACCENT_PRESSED));
+            let _encre = ui.push_style_color(StyleColor::Text, charte::c(charte::ENCRE_SUR_ACCENT));
+            if ui.button_with_size("Valider la coupe", [0.0, H]) {
+                self.message = p.marquer_coupe(t);
+            }
+        } else if ui.button_with_size("Couper (C)", [0.0, H]) {
             self.message = p.marquer_coupe(t);
         }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Une première fois au début du passage, puis clic droit, Entrée ou C à sa fin. Échap abandonne.");
+        }
         ui.same_line();
-        if ui.button_with_size("Scinder (S)", [0.0, 30.0]) {
+        if ui.button_with_size("Scinder (S)", [0.0, H]) {
             self.message = p.scinder(t);
         }
         if ui.is_item_hovered() {
             ui.tooltip_text("Coupe en deux l'élément choisi, à la tête de lecture.");
         }
         ui.same_line();
-        if ui.button_with_size("Couper avant", [0.0, 30.0]) {
+        if ui.button_with_size("Couper avant", [0.0, H]) {
             p.ajouter_coupe(0.0, t);
         }
         ui.same_line();
-        if ui.button_with_size("Couper après", [0.0, 30.0]) {
+        if ui.button_with_size("Couper après", [0.0, H]) {
             p.ajouter_coupe(t, p.montage.duree);
         }
         ui.same_line();
         ui.dummy([12.0, 1.0]);
         ui.same_line();
-        if ui.button_with_size("Nouveau zoom (Z)", [0.0, 30.0]) {
+        if ui.button_with_size("Nouveau zoom (Z)", [0.0, H]) {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
         }
         ui.same_line();
-        if ui.button_with_size("Chapitre (M)", [0.0, 30.0]) {
+        if ui.button_with_size("Chapitre (M)", [0.0, H]) {
             p.poser_chapitre(t);
             self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();
         }
         ui.same_line();
         ui.dummy([12.0, 1.0]);
         ui.same_line();
-        if ui.button_with_size("Intercaler une vidéo…", [0.0, 30.0]) {
+        if ui.button_with_size("Intercaler une vidéo…", [0.0, H]) {
             self.inserer_une_video(false);
         }
         if ui.is_item_hovered() {
             ui.tooltip_text("À la tête de lecture : la prise s'arrête, la vidéo passe avec son son, la prise reprend.");
         }
         ui.same_line();
-        if ui.button_with_size("Vidéo par-dessus…", [0.0, 30.0]) {
+        if ui.button_with_size("Vidéo par-dessus…", [0.0, H]) {
             self.inserer_une_video(true);
         }
         if ui.is_item_hovered() {
@@ -1758,8 +1776,14 @@ impl Application for Monteur {
         ui.window(&panneaux.inspecteur).build(|| self.panneau_inspecteur(ui));
         ui.window(&panneaux.texte).build(|| self.panneau_texte(ui));
         ui.window(&panneaux.ligne).build(|| {
+            self.barre_montage(ui);
             if let Some(p) = &mut self.prise {
                 self.ligne.dessiner(ui, p, (&self.bande, bande));
+                // Le clic droit valide une coupe commencée, à la tête de lecture.
+                if p.coupe_commencee.is_some() && ui.is_window_hovered() && ui.is_mouse_clicked(MouseButton::Right) {
+                    let t = p.lecteur.position();
+                    self.message = p.marquer_coupe(t);
+                }
             }
         });
 

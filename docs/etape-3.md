@@ -92,3 +92,15 @@ par-dessus, sous-titre (ses mots se partagent selon l'instant). Ni un clic ni un
 
 **M** pose un chapitre ; piste Chapitres (un trait et son titre) ; Montage › Proposer les chapitres
 en met un par atelier visité d'après le journal de gestes, sans toucher à ceux posés à la main.
+
+## Remarques de Christophe, vidéo du 05/11/2026 à 16:42
+
+**La molette à la fin de la prise** : le son finissait 11 ms avant la durée de la prise, l'horloge se
+figeait à 202,457 s sur 202,468, la lecture ne s'arrêtait jamais et la vue ramenait sans cesse la
+tête à l'écran. La lecture s'arrête maintenant quand l'horloge ne bouge plus dans la dernière seconde,
+et la vue laisse 3 s à celui qui défile à la molette.
+
+**Les gestes de montage** passent du ruban à une barre au-dessus de la ligne de temps.
+
+**Valider une coupe** : clic droit sur la ligne de temps, Entrée, C, ou le bouton « Valider la coupe ».
+
