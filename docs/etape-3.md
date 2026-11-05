@@ -42,8 +42,9 @@ grossissement tapé sous 1 aurait arrêté le programme au déplacement du cadre
 
 Stop arrête et revient d'où la lecture est partie : en montant, on réécoute le même passage.
 
-À décider avec lui : un dossier par projet, l'insertion d'autres vidéos. À faire : la vignette
-(étape 6).
+Décidé avec lui le 05/11/2026 : un dossier par projet (`~/Vidéos/Projets/<nom>/`), la prise y est
+déplacée ; une vidéo insérée se pose au choix intercalée (la prise s'arrête, son propre son) ou
+par-dessus (la voix de la prise continue). À faire, avec la vignette (étape 6).
 
 ## Essayer sans souris
 
