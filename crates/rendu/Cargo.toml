@@ -1,0 +1,12 @@
+[package]
+name = "rendu"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rendre le montage : un ffmpeg décode, le composeur peint sur tous les cœurs, un ffmpeg encode"
+
+[dependencies]
+noyau = { path = "../noyau" }
+composeur = { path = "../composeur" }
+tiny-skia = "0.11"

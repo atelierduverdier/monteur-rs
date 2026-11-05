@@ -2,7 +2,7 @@
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
-//! `nouveau <nom>`, `enregistrer`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `nouveau <nom>`, `enregistrer`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -15,12 +15,14 @@ use crate::etat::{Choix, Sorte};
 pub struct Scenario {
     etapes: VecDeque<String>,
     jusqua: Option<Instant>,
+    /// `rendre_en_fond` : les étapes suivantes n'attendent pas la fin du rendu.
+    sans_attendre: bool,
 }
 
 impl Scenario {
     pub fn depuis_l_environnement() -> Option<Self> {
         let texte = std::env::var("MONTEUR2_SCENARIO").ok()?;
-        Some(Self { etapes: texte.split(';').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect(), jusqua: None })
+        Some(Self { etapes: texte.split(';').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect(), jusqua: None, sans_attendre: false })
     }
 
     /// Fait les étapes qui peuvent l'être à ce tour ; `true` : quitter.
@@ -30,7 +32,7 @@ impl Scenario {
         }
         self.jusqua = None;
         // Une préparation en cours se laisse finir.
-        if m.prise.as_ref().is_some_and(|p| p.preparation.is_some()) {
+        if m.prise.as_ref().is_some_and(|p| p.preparation.is_some()) || (m.rendu.is_some() && !self.sans_attendre) {
             return false;
         }
         while let Some(etape) = self.etapes.pop_front() {
@@ -104,6 +106,20 @@ impl Scenario {
                     }
                 }
                 "enregistrer" => m.enregistrer(),
+                "rendre_en_fond" => {
+                    self.sans_attendre = true;
+                    m.rendre();
+                }
+                "arreter_rendu" => {
+                    self.sans_attendre = false;
+                    if let Some(r) = &m.rendu {
+                        r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                "rendre" => {
+                    m.rendre();
+                    return false;
+                }
                 "filmer" => m.filmer(),
                 "liste" => println!("  {} prise(s) dans la liste", m.dossier.prises.len()),
                 "nouveau" => m.nouveau_projet(&mots[1..].join(" ")),

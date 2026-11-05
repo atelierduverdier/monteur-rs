@@ -12,6 +12,7 @@ mod vignette;
 mod vue;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 use composeur::police::Polices;
@@ -140,6 +141,15 @@ fn bouton_forme(ui: &Ui, id: &str, forme: Forme, primaire: bool, aide: &str) -> 
 /// La hauteur du ruban, sous la barre de menus.
 const RUBAN: f32 = 44.0;
 
+/// Un rendu en fond : on continue de monter pendant ce temps.
+struct RenduEnCours {
+    nom: String,
+    suivi: Arc<rendu::Suivi>,
+    fin: Receiver<Result<String, String>>,
+    fil: std::thread::JoinHandle<()>,
+    debut: std::time::Instant,
+}
+
 struct Monteur {
     panneaux: Panneaux,
     dossier: Dossier,
@@ -173,6 +183,7 @@ struct Monteur {
     vignette: vignette::Vignette,
     bande: miniatures::Bande,
     bande_neuve: bool,
+    rendu: Option<RenduEnCours>,
     /// Quand on a regardé le dossier pour la dernière fois.
     regarde: std::time::Instant,
     /// Une prise ou un fichier projet choisis dans le dialogue de KDE.
@@ -239,6 +250,7 @@ impl Monteur {
             vignette: vignette::Vignette::new(),
             bande: miniatures::Bande::vide(),
             bande_neuve: false,
+            rendu: None,
             regarde: std::time::Instant::now(),
             prise_choisie: None,
             projet_choisi: None,
@@ -337,6 +349,25 @@ impl Monteur {
             self.ecrire_fiches();
         }
         self.vue.oublier_source();
+    }
+
+    /// Rend la prise ouverte en fond, telle qu'elle est maintenant.
+    fn rendre(&mut self) {
+        if self.rendu.is_some() {
+            return;
+        }
+        self.enregistrer();
+        let Some(p) = &self.prise else { return };
+        let (video, montage) = (p.video.clone(), p.montage.clone());
+        let suivi = Arc::new(rendu::Suivi::default());
+        let (envoi, fin) = mpsc::channel();
+        let s = suivi.clone();
+        let nom = miniatures::nom_lisible(&video.file_stem().unwrap_or_default().to_string_lossy());
+        let fil = std::thread::spawn(move || {
+            let _ = envoi.send(rendu::monter(&video, &montage, &s).map_err(|e| e.0));
+        });
+        self.rendu = Some(RenduEnCours { nom, suivi, fin, fil, debut: std::time::Instant::now() });
+        self.message = "Rendu lancé : tu peux continuer à monter pendant ce temps.".into();
     }
 
     /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera.
@@ -585,6 +616,14 @@ impl Monteur {
         {
             p.preparer();
             self.message = "Préparation en cours : mouvement de l'image, gestes, silences…".into();
+        }
+        ui.same_line();
+        let peut_rendre = self.prise.is_some() && self.rendu.is_none();
+        if ui.button_with_size("Rendre la vidéo", [0.0, 30.0]) && peut_rendre {
+            self.rendre();
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Écrit la vidéo montée à côté de la prise, puis la version avec vignette si la vignette existe.");
         }
         ui.same_line();
         if ui.button_with_size("Filmer VerdierCAM…", [0.0, 30.0]) {
@@ -956,6 +995,17 @@ impl Application for Monteur {
                 self.a_changer = Some(self.dossier.chemin.clone());
             }
         }
+        if let Some(fini) = self.rendu.as_ref().and_then(|r| r.fin.try_recv().ok()) {
+            if let Some(r) = self.rendu.take() {
+                let duree = r.debut.elapsed().as_secs_f64();
+                let _ = r.fil.join();
+                self.message = match fini {
+                    Ok(compte) => format!("{compte} En {:.0} s.", duree),
+                    Err(e) => e,
+                };
+            }
+            self.a_changer = Some(self.dossier.chemin.clone());
+        }
         if let Some(r) = &self.prise_choisie
             && let Ok(chemin) = r.try_recv()
         {
@@ -1081,6 +1131,9 @@ impl Application for Monteur {
                 if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
                     self.enregistrer();
                 }
+                if ui.menu_item_enabled_selected_no_shortcut("Rendre la vidéo", false, self.prise.is_some() && self.rendu.is_none()) {
+                    self.rendre();
+                }
                 m.end();
             }
             if let Some(m) = ui.begin_menu("Édition") {
@@ -1187,6 +1240,19 @@ impl Application for Monteur {
             .size([taille[0], 24.0], Condition::Always)
             .build(|| {
                 ui.text_colored(charte::c(charte::TEXT_2), &self.message);
+                if let Some(r) = &self.rendu {
+                    ui.same_line();
+                    let etape = if r.suivi.vignette.load(std::sync::atomic::Ordering::Relaxed) {
+                        "  vignette en tête…".to_string()
+                    } else {
+                        format!("  rendu de {} : {:.0} %", r.nom, r.suivi.fraction() * 100.0)
+                    };
+                    ui.text_colored(charte::c(charte::ACCENT_HOVER), etape);
+                    ui.same_line();
+                    if ui.small_button("Arrêter le rendu") {
+                        r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 if let Some(p) = &self.prise {
                     if let Some(prep) = &p.preparation {
                         ui.same_line();
@@ -1206,6 +1272,11 @@ impl Application for Monteur {
     }
 
     fn shutdown(&mut self, _c: &mut dear_app::ShutdownContext<'_>) -> Result<(), RunError> {
+        // Un rendu en cours s'arrête proprement : pas de ffmpeg orphelin, pas de fichier partiel.
+        if let Some(r) = self.rendu.take() {
+            r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = r.fil.join();
+        }
         if self.fiches_sales {
             self.ecrire_fiches();
         }

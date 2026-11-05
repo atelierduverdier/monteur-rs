@@ -32,6 +32,7 @@ bloc. FFmpeg 9 et ses en-têtes viennent du paquet `ffmpeg` du système.
 - `crates/noyau` : fichiers, préparation du montage, sous-titres ; contrôlé contre le Monteur 1 ([docs/etape-1.md](docs/etape-1.md)).
 - `crates/composeur` : l'image montée d'un instant et la vignette ; contrôlé contre le Monteur 1 ([docs/etape-2.md](docs/etape-2.md)).
 - `crates/media` : la lecture (image, son, horloge du son, sauts).
+- `crates/rendu` : la vidéo finale ([docs/etape-4.md](docs/etape-4.md)).
 - `crates/appli` : la fenêtre (`monteur2`).
 - `essais/` : les essais de l'étape 0 (fenêtre, vidéo, son), chacun avec ses mesures.
 - `ressources/polices` : Inter et JetBrains Mono (licence OFL).

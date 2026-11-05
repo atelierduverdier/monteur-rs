@@ -137,3 +137,27 @@ fn mouvement_d_images_grises() {
     assert_eq!(m, vec![3.0, noyau::arrondi::arrondi((3.0 * (taille - 1) as f64 + 242.0) / taille as f64, 3)]);
     assert!(analyse::mouvement_image(&octets[..taille]).is_empty());
 }
+
+/// Une vidéo intercalée repousse les sous-titres d'après elle, pas ceux d'avant.
+#[test]
+fn srt_apres_une_intercalee() {
+    let mut m = Montage { duree: 100.0, ..Default::default() };
+    m.reglages.incruster_sous_titres = false;
+    for (debut, texte) in [(5.0, "avant"), (20.0, "après")] {
+        m.sous_titres.push(noyau::montage::SousTitre { debut, fin: debut + 2.0, texte: texte.into(), autres: Default::default() });
+    }
+    m.insertions.push(noyau::montage::Insertion {
+        t: 10.0,
+        video: "x.mp4".into(),
+        debut: 1.0,
+        fin: 5.0,
+        mode: "intercalee".into(),
+        autres: Default::default(),
+    });
+    let srt = sous_titres::texte_srt(&m, 0.0);
+    assert!(srt.contains("00:00:05,000 --> 00:00:07,000\navant"), "{srt}");
+    assert!(srt.contains("00:00:24,000 --> 00:00:26,000\naprès"), "{srt}");
+    // Par-dessus, elle ne repousse rien.
+    m.insertions[0].mode = "dessus".into();
+    assert!(sous_titres::texte_srt(&m, 0.0).contains("00:00:20,000 --> 00:00:22,000"));
+}

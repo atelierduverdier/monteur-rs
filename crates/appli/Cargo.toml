@@ -15,6 +15,7 @@ charte = { path = "../charte" }
 noyau = { path = "../noyau" }
 composeur = { path = "../composeur" }
 media = { path = "../media" }
+rendu = { path = "../rendu" }
 dear-app.workspace = true
 dear-imgui-rs.workspace = true
 wgpu.workspace = true

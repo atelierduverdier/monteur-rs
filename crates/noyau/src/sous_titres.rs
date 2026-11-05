@@ -230,7 +230,9 @@ pub fn texte_srt(montage: &Montage, decalage: f64) -> String {
     tries.sort_by(|a, b| a.debut.total_cmp(&b.debut));
     let mut blocs: Vec<(f64, f64, Vec<String>)> = Vec::new();
     for st in tries {
-        let (debut, fin) = (temps_monte(&retire, st.debut), temps_monte(&retire, st.fin));
+        // Une vidéo intercalée avant lui le repousse d'autant.
+        let ajoute: f64 = montage.insertions.iter().filter(|i| !i.par_dessus() && i.t <= st.debut).map(|i| i.duree()).sum();
+        let (debut, fin) = (temps_monte(&retire, st.debut) + ajoute, temps_monte(&retire, st.fin) + ajoute);
         let morceaux = decouper_sous_titre(&st.texte);
         if fin - debut < SRT_COURT || morceaux.is_empty() {
             continue;
