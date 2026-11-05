@@ -1,0 +1,865 @@
+use std::time::{Duration, Instant};
+
+use tracing::{error, info, warn};
+use winit::{
+    application::ApplicationHandler,
+    event::{DeviceEvent, DeviceId, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    window::WindowId,
+};
+
+use super::{
+    admission::{SurfaceDispatch, SurfacePresentation, SurfaceRedrawRetry},
+    ownership::{OrderedRuntimeOwner, RuntimeOwnership},
+    recovery::{
+        GenerationRelease, RecoveryEffects, RecoveryOutcome, RuntimeFactory, RuntimeGenerations,
+    },
+    shutdown::{
+        RuntimeShutdownErrors, ShutdownCoordinator, abort_runtime_initialization,
+        finish_runtime_shutdown, resolve_run_result,
+    },
+    state::{
+        GpuFaultKind, RuntimeEvent, RuntimeGeneration, UiState, WgpuRuntimeFactory, WindowState,
+    },
+    surface::render_surface_frame,
+};
+use crate::{
+    AppConfig, Application, ApplicationStage, GpuGeneration, InitializedContext, RedrawMode,
+    RunError,
+};
+
+pub(crate) fn run<A: Application + 'static>(
+    config: AppConfig,
+    application: A,
+) -> Result<(), RunError> {
+    validate_config(&config)?;
+    let event_loop = EventLoop::<RuntimeEvent>::with_user_event().build()?;
+    event_loop.listen_device_events(config.device_events);
+    set_initial_control_flow(&event_loop, config.redraw);
+    let event_proxy = event_loop.create_proxy();
+    let mut runner = Runner::new(config, application, event_proxy);
+
+    info!("Starting Dear App event loop");
+    let event_loop_result = event_loop.run_app(&mut runner);
+    runner.shutdown_once();
+    let terminal_before_shutdown = runner.take_terminal_error();
+    let shutdown_error = runner.take_shutdown_error();
+    resolve_run_result(terminal_before_shutdown, event_loop_result, shutdown_error)
+}
+
+pub(super) fn validate_config(config: &AppConfig) -> Result<(), RunError> {
+    if config
+        .io_config_flags
+        .is_some_and(|flags| flags.contains(dear_imgui_rs::ConfigFlags::VIEWPORTS_ENABLE))
+        && !config.multi_viewport
+    {
+        return Err(RunError::MultiViewportUnsupported);
+    }
+    if config.multi_viewport && !cfg!(feature = "multi-viewport") {
+        return Err(RunError::MultiViewportUnsupported);
+    }
+    Ok(())
+}
+
+fn set_initial_control_flow(event_loop: &EventLoop<RuntimeEvent>, redraw: RedrawMode) {
+    match redraw {
+        RedrawMode::Poll => event_loop.set_control_flow(ControlFlow::Poll),
+        RedrawMode::Wait => event_loop.set_control_flow(ControlFlow::Wait),
+        RedrawMode::WaitUntil { fps } => {
+            event_loop
+                .set_control_flow(ControlFlow::WaitUntil(Instant::now() + frame_duration(fps)));
+        }
+    }
+}
+
+fn frame_duration(fps: f32) -> Duration {
+    Duration::from_secs_f32(1.0 / fps.max(1.0))
+}
+
+struct Runtime {
+    ownership: OrderedRuntimeOwner<RuntimeOwnership>,
+    clear_color: wgpu::Color,
+    admitted_frame_count: u64,
+    wake: crate::AppWakeHandle,
+}
+
+impl Runtime {
+    fn window(&self) -> &WindowState {
+        &self.ownership.get().window
+    }
+
+    fn new<A: Application>(
+        event_loop: &ActiveEventLoop,
+        event_proxy: EventLoopProxy<RuntimeEvent>,
+        wake: crate::AppWakeHandle,
+        config: &AppConfig,
+        application: &mut A,
+    ) -> Result<Self, RunError> {
+        let mut window = WindowState::new(event_loop, config)?;
+        let mut ui = UiState::new(&window, config, application)?;
+        let generation = match WgpuRuntimeFactory::create(
+            &mut window,
+            &mut ui,
+            config,
+            event_proxy,
+            GpuGeneration::INITIAL,
+        ) {
+            Ok(generation) => generation,
+            Err(error) => {
+                return Err(abort_runtime_initialization(application, ui, window, error));
+            }
+        };
+        let generations = match RuntimeGenerations::new(generation) {
+            Ok(generations) => generations,
+            Err(error) => {
+                return Err(abort_runtime_initialization(application, ui, window, error));
+            }
+        };
+        let mut runtime = Self {
+            ownership: OrderedRuntimeOwner::new(RuntimeOwnership {
+                window,
+                ui,
+                generations,
+            }),
+            clear_color: wgpu::Color {
+                r: config.clear_color[0] as f64,
+                g: config.clear_color[1] as f64,
+                b: config.clear_color[2] as f64,
+                a: config.clear_color[3] as f64,
+            },
+            admitted_frame_count: 0,
+            wake: wake.clone(),
+        };
+
+        if let Err(error) = runtime.notify_initialized(application, config, wake) {
+            return Err(super::state::preserve_initialization_error(error, || {
+                let application_error = runtime.shutdown_application(application);
+                let teardown_error = runtime.teardown();
+                application_error.or(teardown_error).map_or(Ok(()), Err)
+            }));
+        }
+        Ok(runtime)
+    }
+
+    fn notify_initialized<A: Application>(
+        &mut self,
+        application: &mut A,
+        config: &AppConfig,
+        wake: crate::AppWakeHandle,
+    ) -> Result<(), RunError> {
+        let RuntimeOwnership {
+            window,
+            ui,
+            generations,
+        } = self.ownership.get_mut();
+        let generation = generations
+            .current_mut()
+            .ok_or_else(|| RunError::Recovery {
+                message: "initialized callback requested without a GPU generation".to_owned(),
+            })?;
+        super::state::run_application_frame_boundary(
+            &mut ui.context,
+            ApplicationStage::Initialized,
+            |context| {
+                let mut initialized = InitializedContext {
+                    imgui: context,
+                    window: &window.window,
+                    config,
+                    wake,
+                };
+                let mut gpu = generation.context(window)?;
+                application.initialized(&mut initialized, &mut gpu)
+            },
+        )?;
+        super::state::validate_supported_imgui_config(&ui.context, config.multi_viewport)
+    }
+
+    fn handle_event<A: Application>(
+        &mut self,
+        application: &mut A,
+        window_id: WindowId,
+        event: &WindowEvent,
+    ) -> Result<bool, RunError> {
+        let RuntimeOwnership {
+            window,
+            ui,
+            generations,
+        } = self.ownership.get_mut();
+        let outcome = ui
+            .platform
+            .handle_window_event(&mut ui.context, window_id, event)
+            .map_err(|error| super::state::platform_error("Winit event handling", error))?;
+        let Some(target) = outcome.target else {
+            return Ok(false);
+        };
+
+        let mut exit_requested = matches!(
+            outcome.platform_action,
+            dear_imgui_winit::WinitPlatformAction::MainCloseRequested
+        );
+        let needs_frame = outcome.needs_frame;
+        ui.platform
+            .with_window(target.native.instance_id, |native_window| {
+                super::state::run_application_frame_boundary(
+                    &mut ui.context,
+                    ApplicationStage::Event,
+                    |imgui| {
+                        let mut context = crate::EventContext {
+                            event,
+                            imgui,
+                            window: native_window,
+                            main_window: &window.window,
+                            outcome,
+                            exit_requested: &mut exit_requested,
+                            wake: &self.wake,
+                        };
+                        application.event(&mut context)
+                    },
+                )
+            })
+            .map_err(|error| super::state::platform_error("borrow native event target", error))?
+            .ok_or_else(|| RunError::Recovery {
+                message: "native event target retired during dispatch".to_owned(),
+            })??;
+        super::state::validate_supported_imgui_config(&ui.context, ui.multi_viewport)?;
+
+        let Some(generation) = generations.current() else {
+            return Ok(exit_requested);
+        };
+        match event {
+            _ if !target.native.is_main => {}
+            WindowEvent::Resized(size) => {
+                window.resize(*size, &generation.gpu.device);
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let size = window.window.inner_size();
+                window.resize(size, &generation.gpu.device);
+            }
+            _ => {}
+        }
+        if needs_frame
+            || window_event_requests_redraw(event)
+            || (!target.native.is_main && matches!(event, WindowEvent::RedrawRequested))
+        {
+            window.window.request_redraw();
+        }
+        Ok(exit_requested)
+    }
+
+    fn render<A: Application>(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        application: &mut A,
+        config: &AppConfig,
+    ) -> Result<SurfaceDispatch<bool>, RunError> {
+        render_surface_frame(
+            self.ownership.get_mut(),
+            self.clear_color,
+            &mut self.admitted_frame_count,
+            application,
+            config,
+            &self.wake,
+            event_loop,
+        )
+    }
+
+    fn recover<A: Application>(
+        &mut self,
+        application: &mut A,
+        config: &AppConfig,
+        event_proxy: EventLoopProxy<RuntimeEvent>,
+        signal_generation: GpuGeneration,
+    ) -> RecoveryOutcome {
+        let RuntimeOwnership {
+            window,
+            ui,
+            generations,
+        } = self.ownership.get_mut();
+        let mut environment = RuntimeRecovery {
+            window,
+            ui,
+            application,
+            config,
+            event_proxy,
+        };
+        let mut factory = WgpuRuntimeFactory;
+        generations.recover(signal_generation, &mut environment, &mut factory)
+    }
+
+    fn recovery_error_message(&self) -> String {
+        self.ownership
+            .get()
+            .generations
+            .terminal_error()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "GPU recovery failed without a terminal error".to_owned())
+    }
+
+    fn current_generation(&self) -> Option<GpuGeneration> {
+        self.ownership.get().generations.current_generation()
+    }
+
+    fn take_pending_gpu_signals(&self, poll: bool) -> Vec<RuntimeEvent> {
+        self.ownership
+            .get()
+            .generations
+            .current()
+            .map_or_else(Vec::new, |generation| {
+                generation.gpu.take_pending_signals(generation.id, poll)
+            })
+    }
+
+    fn shutdown_application<A: Application>(&mut self, application: &mut A) -> Option<RunError> {
+        let RuntimeOwnership {
+            window,
+            ui,
+            generations,
+        } = self.ownership.get_mut();
+        let generation = generations.current_generation();
+        super::state::run_application_shutdown(
+            application,
+            &mut ui.context,
+            &window.window,
+            generation,
+        )
+        .err()
+    }
+
+    fn fail(&mut self, error: RunError) {
+        self.ownership.get_mut().generations.fail(error);
+    }
+
+    fn teardown(mut self) -> Option<RunError> {
+        let terminal_error = self.ownership.get_mut().generations.take_terminal_error();
+        let release_result = self.ownership.teardown();
+        terminal_error.or_else(|| release_result.err())
+    }
+
+    fn shutdown<A: Application>(mut self, application: &mut A) -> RuntimeShutdownErrors {
+        let terminal_error = self.ownership.get_mut().generations.take_terminal_error();
+        let shutdown_error = self.shutdown_application(application);
+        let ownership = self.ownership;
+        finish_runtime_shutdown(terminal_error, || shutdown_error, || ownership.teardown())
+    }
+}
+
+struct RuntimeRecovery<'a, A> {
+    window: &'a mut WindowState,
+    ui: &'a mut UiState,
+    application: &'a mut A,
+    config: &'a AppConfig,
+    event_proxy: EventLoopProxy<RuntimeEvent>,
+}
+
+impl<A: Application> GenerationRelease<RuntimeGeneration> for RuntimeRecovery<'_, A> {
+    fn release_generation(&mut self, generation: &mut RuntimeGeneration) -> Result<(), RunError> {
+        generation
+            .gpu
+            .release_renderer(&mut self.ui.context, self.window)
+    }
+}
+
+impl<A: Application> RecoveryEffects<RuntimeGeneration> for RuntimeRecovery<'_, A> {
+    fn gpu_lost(&mut self, generation: &mut RuntimeGeneration) -> Result<(), RunError> {
+        let mut context = generation.context(self.window)?;
+        self.application
+            .gpu_lost(&mut context)
+            .map_err(|error| error.during_application_stage(ApplicationStage::GpuLost))
+    }
+
+    fn invalidate_resources(&mut self, generation: &mut RuntimeGeneration) -> Result<(), RunError> {
+        generation
+            .gpu
+            .renderer
+            .prepare_recovery(&mut self.ui.context)
+    }
+
+    fn gpu_recreated(&mut self, generation: &mut RuntimeGeneration) -> Result<(), RunError> {
+        let mut context = generation.context(self.window)?;
+        self.application
+            .gpu_recreated(&mut context)
+            .map_err(|error| error.during_application_stage(ApplicationStage::GpuRecreated))
+    }
+}
+
+impl<A: Application> RuntimeFactory<RuntimeRecovery<'_, A>> for WgpuRuntimeFactory {
+    type Candidate = RuntimeGeneration;
+
+    fn create(
+        &mut self,
+        environment: &mut RuntimeRecovery<'_, A>,
+        generation: GpuGeneration,
+    ) -> Result<Self::Candidate, RunError> {
+        #[cfg(feature = "multi-viewport")]
+        if environment.config.multi_viewport {
+            environment
+                .ui
+                .platform
+                .disable_viewports(&mut environment.ui.context)
+                .map_err(|error| {
+                    super::state::platform_error(
+                        "retire secondary windows after renderer recovery",
+                        error,
+                    )
+                })?;
+            environment
+                .ui
+                .platform
+                .enable_viewports(&mut environment.ui.context)
+                .map_err(|error| {
+                    super::state::platform_error("reattach native viewport runtime", error)
+                })?;
+        }
+        WgpuRuntimeFactory::create(
+            environment.window,
+            environment.ui,
+            environment.config,
+            environment.event_proxy.clone(),
+            generation,
+        )
+    }
+}
+
+struct Runner<A> {
+    config: AppConfig,
+    ownership: RunnerOwnership<Runtime, A>,
+    shutdown: ShutdownCoordinator,
+    event_proxy: EventLoopProxy<RuntimeEvent>,
+    wake: crate::AppWakeHandle,
+    last_wake: Instant,
+    surface_redraw_retry: SurfaceRedrawRetry,
+}
+
+/// Keeps renderer-side registrations alive no longer than their application-owned resources.
+pub(super) struct RunnerOwnership<R, A> {
+    pub(super) runtime: Option<R>,
+    pub(super) application: A,
+}
+
+impl<A: Application> Runner<A> {
+    fn drain_gpu_signals(&mut self, event_loop: &ActiveEventLoop, poll: bool) -> bool
+    where
+        A: 'static,
+    {
+        let before = self
+            .ownership
+            .runtime
+            .as_ref()
+            .and_then(Runtime::current_generation);
+        let signals = self
+            .ownership
+            .runtime
+            .as_ref()
+            .map_or_else(Vec::new, |runtime| runtime.take_pending_gpu_signals(poll));
+        for signal in signals {
+            self.user_event(event_loop, signal);
+            if self.shutdown.started() {
+                break;
+            }
+        }
+        self.shutdown.started()
+            || before
+                != self
+                    .ownership
+                    .runtime
+                    .as_ref()
+                    .and_then(Runtime::current_generation)
+    }
+    fn new(config: AppConfig, application: A, event_proxy: EventLoopProxy<RuntimeEvent>) -> Self {
+        let wake = crate::AppWakeHandle::new(event_proxy.clone());
+        Self {
+            config,
+            ownership: RunnerOwnership {
+                runtime: None,
+                application,
+            },
+            shutdown: ShutdownCoordinator::default(),
+            event_proxy,
+            wake,
+            last_wake: Instant::now(),
+            surface_redraw_retry: SurfaceRedrawRetry::default(),
+        }
+    }
+
+    fn terminate(&mut self, event_loop: &ActiveEventLoop, error: RunError) {
+        error!("Dear App terminated: {error}");
+        if let Some(runtime) = self.ownership.runtime.as_mut() {
+            runtime.fail(error);
+        } else {
+            self.shutdown.remember_error(error);
+        }
+        self.shutdown_once();
+        event_loop.exit();
+    }
+
+    fn exit_normally(&mut self, event_loop: &ActiveEventLoop) {
+        self.shutdown_once();
+        event_loop.exit();
+    }
+
+    fn shutdown_once(&mut self) {
+        self.wake.close();
+        self.shutdown.shutdown_once(
+            &mut self.ownership.runtime,
+            &mut self.ownership.application,
+            Runtime::shutdown,
+        );
+    }
+
+    fn take_terminal_error(&mut self) -> Option<RunError> {
+        self.shutdown.take_terminal_error()
+    }
+
+    fn take_shutdown_error(&mut self) -> Option<RunError> {
+        self.shutdown.take_shutdown_error()
+    }
+}
+
+pub(super) fn should_process_runtime_event(
+    shutdown_called: bool,
+    event_loop_exiting: bool,
+) -> bool {
+    !shutdown_called && !event_loop_exiting
+}
+
+pub(super) fn uncaptured_gpu_fault(kind: GpuFaultKind, message: String) -> RunError {
+    match kind {
+        GpuFaultKind::OutOfMemory => RunError::GpuOutOfMemory { message },
+        GpuFaultKind::Validation => RunError::GpuValidation { message },
+        GpuFaultKind::Internal => RunError::GpuInternal { message },
+    }
+}
+
+pub(super) enum GpuFaultDisposition {
+    IgnoreStale,
+    Terminate(RunError),
+}
+
+pub(super) fn classify_uncaptured_gpu_fault(
+    current_generation: Option<GpuGeneration>,
+    signal_generation: GpuGeneration,
+    kind: GpuFaultKind,
+    message: String,
+) -> GpuFaultDisposition {
+    match current_generation {
+        None => GpuFaultDisposition::Terminate(RunError::Recovery {
+            message: "GPU fault received before runtime initialization".to_owned(),
+        }),
+        Some(current) if current != signal_generation => GpuFaultDisposition::IgnoreStale,
+        Some(_) => GpuFaultDisposition::Terminate(uncaptured_gpu_fault(kind, message)),
+    }
+}
+
+pub(super) fn initialize_runtime_once<R, E>(
+    runtime: &mut Option<R>,
+    shutdown_started: bool,
+    initialize: impl FnOnce() -> Result<R, E>,
+) -> Option<Result<(), E>> {
+    if runtime.is_some() || shutdown_started {
+        return None;
+    }
+
+    Some(initialize().map(|initialized| {
+        *runtime = Some(initialized);
+    }))
+}
+
+pub(super) fn window_event_requests_redraw(event: &WindowEvent) -> bool {
+    !matches!(
+        event,
+        WindowEvent::RedrawRequested | WindowEvent::CloseRequested | WindowEvent::Destroyed
+    )
+}
+
+pub(super) fn render_rejection_can_follow_device_loss(error: &RunError) -> bool {
+    match error {
+        RunError::SurfaceValidation => true,
+        #[cfg(feature = "multi-viewport")]
+        RunError::ViewportWork(error) => {
+            !error.faults().is_empty()
+                && error.faults().iter().all(|fault| {
+                    matches!(
+                        fault,
+                        dear_imgui_wgpu::multi_viewport::WgpuViewportError::SurfaceRejected { .. }
+                    )
+                })
+        }
+        _ => false,
+    }
+}
+
+impl<A: Application + 'static> ApplicationHandler<RuntimeEvent> for Runner<A> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let shutdown_started = self.shutdown.started();
+        let event_proxy = self.event_proxy.clone();
+        let wake = self.wake.clone();
+        match initialize_runtime_once(&mut self.ownership.runtime, shutdown_started, || {
+            Runtime::new(
+                event_loop,
+                event_proxy,
+                wake,
+                &self.config,
+                &mut self.ownership.application,
+            )
+        }) {
+            Some(Ok(())) => {
+                info!("Dear App window and initial GPU generation are ready");
+                self.ownership
+                    .runtime
+                    .as_ref()
+                    .expect("successful initialization stores the runtime")
+                    .window()
+                    .window
+                    .request_redraw();
+            }
+            Some(Err(error)) => self.terminate(event_loop, error),
+            None => {}
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RuntimeEvent) {
+        if matches!(event, RuntimeEvent::Wake) {
+            self.wake.acknowledge();
+            return;
+        }
+        let generation = match &event {
+            RuntimeEvent::DeviceLost { generation, .. }
+            | RuntimeEvent::GpuFault { generation, .. } => *generation,
+            RuntimeEvent::Wake => return,
+        };
+
+        if !should_process_runtime_event(self.shutdown.started(), event_loop.exiting()) {
+            warn!(
+                generation = generation.get(),
+                "Ignoring GPU signal after runtime shutdown"
+            );
+            return;
+        }
+
+        let (generation, message) = match event {
+            RuntimeEvent::DeviceLost {
+                generation,
+                message,
+            } => (generation, message),
+            RuntimeEvent::GpuFault {
+                generation,
+                kind,
+                message,
+            } => {
+                let current_generation = self
+                    .ownership
+                    .runtime
+                    .as_ref()
+                    .and_then(Runtime::current_generation);
+                match classify_uncaptured_gpu_fault(current_generation, generation, kind, message) {
+                    GpuFaultDisposition::IgnoreStale => {
+                        warn!(
+                            generation = generation.get(),
+                            "Ignoring stale uncaptured GPU fault"
+                        );
+                    }
+                    GpuFaultDisposition::Terminate(error) => self.terminate(event_loop, error),
+                }
+                return;
+            }
+            RuntimeEvent::Wake => return,
+        };
+
+        let Some(runtime) = self.ownership.runtime.as_mut() else {
+            self.terminate(
+                event_loop,
+                RunError::Recovery {
+                    message: "device loss received before runtime initialization".to_owned(),
+                },
+            );
+            return;
+        };
+        match runtime.recover(
+            &mut self.ownership.application,
+            &self.config,
+            self.event_proxy.clone(),
+            generation,
+        ) {
+            RecoveryOutcome::Ignored => {
+                warn!(
+                    generation = generation.get(),
+                    "Ignoring stale or duplicate device-loss signal"
+                );
+            }
+            RecoveryOutcome::Recovered(replacement) => {
+                warn!(
+                    generation = generation.get(),
+                    replacement = replacement.get(),
+                    %message,
+                    "Recovered lost WGPU device"
+                );
+                runtime.window().window.request_redraw();
+            }
+            RecoveryOutcome::Failed => {
+                let message = runtime.recovery_error_message();
+                error!(%message, "WGPU device recovery failed");
+                self.shutdown_once();
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.drain_gpu_signals(event_loop, false);
+        if !should_process_runtime_event(self.shutdown.started(), event_loop.exiting()) {
+            return;
+        }
+        let Some(runtime) = self.ownership.runtime.as_mut() else {
+            return;
+        };
+        let handle_result =
+            runtime.handle_event(&mut self.ownership.application, window_id, &event);
+
+        let exit_requested = match handle_result {
+            Ok(exit_requested) => exit_requested,
+            Err(error) => {
+                self.terminate(event_loop, error);
+                return;
+            }
+        };
+        if exit_requested {
+            self.exit_normally(event_loop);
+            return;
+        }
+
+        if matches!(event, WindowEvent::RedrawRequested)
+            && window_id == runtime.window().window.id()
+        {
+            let render_result =
+                runtime.render(event_loop, &mut self.ownership.application, &self.config);
+            match render_result {
+                Ok(SurfaceDispatch {
+                    main: SurfacePresentation::Presented(true),
+                    ..
+                }) => self.exit_normally(event_loop),
+                Ok(dispatch) => {
+                    self.surface_redraw_retry
+                        .settle(dispatch.retry_needed, Instant::now());
+                    if matches!(self.config.redraw, RedrawMode::Poll)
+                        && let Some(runtime) = self.ownership.runtime.as_ref()
+                    {
+                        runtime.window().window.request_redraw();
+                    }
+                }
+                Err(error) => {
+                    if render_rejection_can_follow_device_loss(&error)
+                        && self.drain_gpu_signals(event_loop, true)
+                    {
+                        return;
+                    }
+                    self.terminate(event_loop, error);
+                }
+            }
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if !should_process_runtime_event(self.shutdown.started(), event_loop.exiting()) {
+            return;
+        }
+        let Some(runtime) = self.ownership.runtime.as_mut() else {
+            return;
+        };
+        let mut exit_requested = false;
+        let ownership = runtime.ownership.get_mut();
+        let mut context = crate::DeviceEventContext {
+            device_id,
+            event: &event,
+            window: &ownership.window.window,
+            wake: &self.wake,
+            exit_requested: &mut exit_requested,
+        };
+        let result = super::state::run_application_frame_boundary(
+            &mut ownership.ui.context,
+            ApplicationStage::DeviceEvent,
+            |_| self.ownership.application.device_event(&mut context),
+        );
+        if let Err(error) = result {
+            self.terminate(event_loop, error);
+        } else if exit_requested {
+            self.exit_normally(event_loop);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !should_process_runtime_event(self.shutdown.started(), event_loop.exiting()) {
+            return;
+        }
+        let now = Instant::now();
+        let retry_due = self.surface_redraw_retry.take_due(now);
+        let application_due = self.wake.take_due(now);
+        if application_due && let Some(runtime) = self.ownership.runtime.as_ref() {
+            runtime.window().window.request_redraw();
+        }
+        let application_deadline = self.wake.deadline();
+        match self.config.redraw {
+            RedrawMode::Poll => {
+                event_loop.set_control_flow(ControlFlow::Poll);
+                if let Some(runtime) = self.ownership.runtime.as_ref() {
+                    runtime.window().window.request_redraw();
+                }
+            }
+            RedrawMode::Wait => {
+                if retry_due && let Some(runtime) = self.ownership.runtime.as_ref() {
+                    runtime.window().window.request_redraw();
+                }
+                match earliest_deadline(self.surface_redraw_retry.deadline(), application_deadline)
+                {
+                    Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                    None => event_loop.set_control_flow(ControlFlow::Wait),
+                }
+            }
+            RedrawMode::WaitUntil { fps } => {
+                let frame = frame_duration(fps);
+                let mut next_wake = self.last_wake + frame;
+                let periodic_due = now >= next_wake;
+                if periodic_due {
+                    self.last_wake = now;
+                    next_wake = now + frame;
+                }
+                if (periodic_due || retry_due)
+                    && let Some(runtime) = self.ownership.runtime.as_ref()
+                {
+                    runtime.window().window.request_redraw();
+                }
+                if let Some(retry_deadline) = self.surface_redraw_retry.deadline() {
+                    next_wake = next_wake.min(retry_deadline);
+                }
+                if let Some(deadline) = application_deadline {
+                    next_wake = next_wake.min(deadline);
+                }
+                event_loop.set_control_flow(ControlFlow::WaitUntil(next_wake));
+            }
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.shutdown_once();
+    }
+}
+
+pub(super) fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+#[path = "native_tests.rs"]
+mod native_tests;

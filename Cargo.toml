@@ -16,3 +16,7 @@ ffmpeg-the-third = "6"
 cpal = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+# dear-app ne permet pas de nommer la fenêtre : une ligne ajoutée dans src/runtime/state.rs.
+[patch.crates-io]
+dear-app = { path = "vendor/dear-app" }

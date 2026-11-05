@@ -1,0 +1,41 @@
+[package]
+name = "dear-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Generation-aware Dear ImGui application runtime for dear-imgui-rs on Winit and WGPU"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+readme = "README.md"
+
+[dependencies]
+dear-imgui-rs.workspace = true
+dear-imgui-winit.workspace = true
+dear-imgui-wgpu.workspace = true
+dear-imgui-test-engine = { workspace = true, optional = true }
+wgpu.workspace = true
+winit.workspace = true
+pollster.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+# Optional add-ons
+dear-implot = { workspace = true, optional = true }
+dear-imnodes = { workspace = true, optional = true }
+dear-implot3d = { workspace = true, optional = true }
+
+[features]
+default = []
+implot = ["dep:dear-implot"]
+imnodes = ["dep:dear-imnodes"]
+implot3d = ["dep:dear-implot3d"]
+test-engine = ["dep:dear-imgui-test-engine"]
+multi-viewport = ["dear-imgui-winit/multi-viewport", "dear-imgui-wgpu/multi-viewport-winit"]
+
+[[example]]
+name = "multi_viewport"
+required-features = ["multi-viewport"]

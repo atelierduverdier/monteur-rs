@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<!-- L'icone du Monteur 2 : sa ligne de temps. Trois pistes, un plan coupe en deux,
+     la tete de lecture en orange. Le liseré gris garde la carte visible sur fond sombre. -->
+<rect x="3" y="3" width="58" height="58" rx="11" fill="#1e1e1e" stroke="#7a808a" stroke-width="1.5"/>
+<rect x="10" y="15" width="44" height="13" rx="3" fill="#d6dae0"/>
+<rect x="10" y="32" width="17" height="9" rx="2.5" fill="#8a9099"/>
+<rect x="31" y="32" width="23" height="9" rx="2.5" fill="#8a9099"/>
+<rect x="10" y="45" width="28" height="7" rx="2.5" fill="#565c66"/>
+<rect x="43" y="45" width="11" height="7" rx="2.5" fill="#565c66"/>
+<g fill="#ff6d00" stroke="#1e1e1e" stroke-width="2" paint-order="stroke" stroke-linejoin="round">
+  <rect x="26.5" y="12" width="5" height="45" rx="2.5"/>
+  <path d="M20 7 H38 V13 L29 21 L20 13 Z"/>
+</g>
+</svg>

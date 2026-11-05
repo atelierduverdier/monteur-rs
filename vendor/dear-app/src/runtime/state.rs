@@ -1,0 +1,1287 @@
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use dear_imgui_rs as imgui;
+use dear_imgui_rs::ConfigFlags;
+use pollster::block_on;
+use winit::{
+    dpi::{LogicalSize, PhysicalSize},
+    event_loop::{ActiveEventLoop, EventLoopProxy},
+    window::Window,
+};
+
+use crate::application::DockingController;
+use crate::{
+    AppConfig, Application, ApplicationStage, GpuApi, GpuContext, GpuGeneration, InitContext,
+    RunError, ShutdownContext, Theme,
+};
+
+use super::recovery::OwnedGpuGeneration;
+
+const GPU_RELEASE_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+pub(crate) fn platform_error(
+    operation: &'static str,
+    error: dear_imgui_winit::WinitPlatformError,
+) -> RunError {
+    RunError::Platform {
+        operation,
+        source: error,
+    }
+}
+
+pub(crate) fn run_application_frame_boundary<T>(
+    context: &mut imgui::Context,
+    stage: ApplicationStage,
+    callback: impl FnOnce(&mut imgui::Context) -> Result<T, RunError>,
+) -> Result<T, RunError> {
+    let before = context.frame_lifecycle_stamp();
+    let result = callback(context);
+    let result = result.map_err(|error| error.during_application_stage(stage));
+    let after = context.frame_lifecycle_stamp();
+    if after == before {
+        return result;
+    }
+
+    if after.state() == imgui::FrameLifecycleState::InFrame {
+        context.end_frame();
+    }
+    let ownership_error = RunError::ImGuiFrameOwnership {
+        stage,
+        before,
+        after,
+    };
+    match result {
+        Ok(_) => Err(ownership_error),
+        Err(primary) => {
+            tracing::warn!(
+                %primary,
+                secondary = %ownership_error,
+                "application callback failed after changing Dear ImGui frame ownership"
+            );
+            Err(primary)
+        }
+    }
+}
+
+pub(crate) fn run_application_shutdown<A: Application>(
+    application: &mut A,
+    context: &mut imgui::Context,
+    window: &Window,
+    generation: Option<GpuGeneration>,
+) -> Result<(), RunError> {
+    run_application_frame_boundary(context, ApplicationStage::Shutdown, |imgui| {
+        let mut shutdown = ShutdownContext {
+            imgui,
+            window,
+            generation,
+        };
+        application.shutdown(&mut shutdown)
+    })
+}
+
+pub(crate) fn preserve_initialization_error(
+    primary_error: RunError,
+    cleanup: impl FnOnce() -> Result<(), RunError>,
+) -> RunError {
+    if let Err(cleanup_error) = cleanup() {
+        tracing::warn!(
+            primary = %primary_error,
+            cleanup = %cleanup_error,
+            "Dear App initialization cleanup failed; preserving the original initialization error"
+        );
+    }
+    primary_error
+}
+
+fn shutdown_after_initialization_failure<A: Application>(
+    application: &mut A,
+    context: &mut imgui::Context,
+    window: &Window,
+) -> Result<(), RunError> {
+    run_application_shutdown(application, context, window, None)
+}
+
+fn abort_context_initialization<A: Application>(
+    application: &mut A,
+    mut context: imgui::Context,
+    window: &Window,
+    primary_error: RunError,
+) -> RunError {
+    preserve_initialization_error(primary_error, || {
+        shutdown_after_initialization_failure(application, &mut context, window)
+    })
+}
+
+fn abort_platform_initialization<A: Application>(
+    application: &mut A,
+    mut context: imgui::Context,
+    window: &Window,
+    mut platform: dear_imgui_winit::WinitPlatform,
+    primary_error: RunError,
+) -> RunError {
+    preserve_initialization_error(primary_error, move || {
+        let application_result =
+            shutdown_after_initialization_failure(application, &mut context, window);
+        let platform_result = platform.shutdown(&mut context).map_err(|error| {
+            platform_error("Winit platform cleanup after initialization failure", error)
+        });
+
+        match platform_result {
+            Ok(()) => {
+                drop(platform);
+                drop(context);
+                application_result
+            }
+            Err(error) => {
+                // A failed explicit platform release leaves Context attachment state uncertain.
+                // Quarantine both values rather than allowing Context drop to invoke the fallback.
+                std::mem::forget(platform);
+                std::mem::forget(context);
+                application_result.and(Err(error))
+            }
+        }
+    })
+}
+
+/// Completes the fallible portion of UI initialization after Context configuration.
+///
+/// The two cleanup callbacks consume every value that was successfully published before the
+/// failing operation. Keeping those ownership transfers in one place makes it impossible for a
+/// later platform-construction failure to bypass the application shutdown hook.
+fn initialize_configured_ui<A, P>(
+    application: &mut A,
+    context: imgui::Context,
+    configure: impl FnOnce(&mut A, &mut imgui::Context) -> Result<(), RunError>,
+    create_platform: impl FnOnce(&mut A, &mut imgui::Context) -> Result<P, RunError>,
+    attach_window: impl FnOnce(&mut A, &mut P, &mut imgui::Context) -> Result<(), RunError>,
+    abort_without_platform: impl FnOnce(&mut A, imgui::Context, RunError) -> RunError,
+    abort_with_platform: impl FnOnce(&mut A, imgui::Context, P, RunError) -> RunError,
+) -> Result<(imgui::Context, P), RunError> {
+    let mut context = context;
+    if let Err(error) = configure(application, &mut context) {
+        return Err(abort_without_platform(application, context, error));
+    }
+
+    let mut platform = match create_platform(application, &mut context) {
+        Ok(platform) => platform,
+        Err(error) => return Err(abort_without_platform(application, context, error)),
+    };
+
+    if let Err(error) = attach_window(application, &mut platform, &mut context) {
+        return Err(abort_with_platform(application, context, platform, error));
+    }
+
+    Ok((context, platform))
+}
+
+pub(crate) fn validate_supported_imgui_config(
+    context: &imgui::Context,
+    multi_viewport: bool,
+) -> Result<(), RunError> {
+    if context
+        .io()
+        .config_flags()
+        .contains(ConfigFlags::VIEWPORTS_ENABLE)
+        != multi_viewport
+    {
+        return Err(RunError::MultiViewportUnsupported);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "imnodes")]
+use dear_imnodes as imnodes;
+#[cfg(feature = "implot")]
+use dear_implot as implot;
+#[cfg(feature = "implot3d")]
+use dear_implot3d as implot3d;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GpuFaultKind {
+    OutOfMemory,
+    Validation,
+    Internal,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RuntimeEvent {
+    Wake,
+    DeviceLost {
+        generation: GpuGeneration,
+        message: String,
+    },
+    GpuFault {
+        generation: GpuGeneration,
+        kind: GpuFaultKind,
+        message: String,
+    },
+}
+
+pub(crate) struct WindowState {
+    // Residual unconfigured surfaces from failed construction also release before native owners.
+    pub(crate) surface: Option<wgpu::Surface<'static>>,
+    instance: wgpu::Instance,
+    pub(crate) window: Arc<Window>,
+    pub(crate) surface_config: Option<wgpu::SurfaceConfiguration>,
+}
+
+impl WindowState {
+    pub(crate) fn new(event_loop: &ActiveEventLoop, config: &AppConfig) -> Result<Self, RunError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: config.wgpu.backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let size = LogicalSize::new(config.window_size.0, config.window_size.1);
+        let window = Arc::new(
+            event_loop
+                .create_window({
+                    let attributs = Window::default_attributes()
+                        .with_title(config.window_title.clone())
+                        .with_inner_size(size);
+                    // Monteur 2 : sans identité, KDE montre le W de Wayland au lieu de l'icône.
+                    #[cfg(target_os = "linux")]
+                    let attributs = {
+                        use winit::platform::wayland::WindowAttributesExtWayland;
+                        attributs.with_name("fr.atelierduverdier.Monteur2", "")
+                    };
+                    attributs
+                })
+                .map_err(RunError::WindowCreation)?,
+        );
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(RunError::SurfaceCreation)?;
+
+        Ok(Self {
+            instance,
+            window,
+            surface: Some(surface),
+            surface_config: None,
+        })
+    }
+
+    pub(crate) fn configure_surface(
+        &mut self,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        config: &AppConfig,
+    ) -> Result<wgpu::TextureFormat, RunError> {
+        let capabilities = self.surface()?.get_capabilities(adapter);
+        let current_format = self.surface_config.as_ref().map(|config| config.format);
+        let preferred_srgb = [
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        ];
+        let format = current_format
+            .filter(|format| capabilities.formats.contains(format))
+            .or_else(|| {
+                preferred_srgb
+                    .iter()
+                    .copied()
+                    .find(|format| capabilities.formats.contains(format))
+            })
+            .or_else(|| capabilities.formats.first().copied())
+            .ok_or(RunError::SurfaceFormatUnavailable)?;
+        let size = self.window.inner_size();
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: config.present_mode,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        self.surface()?.configure(device, &surface_config);
+        self.surface_config = Some(surface_config);
+        Ok(format)
+    }
+
+    pub(crate) fn reconfigure(&self, device: &wgpu::Device) {
+        if let (Some(surface), Some(surface_config)) = (&self.surface, &self.surface_config) {
+            surface.configure(device, surface_config);
+        }
+    }
+
+    pub(crate) fn surface(&self) -> Result<&wgpu::Surface<'static>, RunError> {
+        self.surface.as_ref().ok_or_else(|| RunError::Recovery {
+            message: "main surface is retired until a GPU generation creates its replacement"
+                .to_owned(),
+        })
+    }
+
+    fn ensure_surface(&mut self) -> Result<(), RunError> {
+        if self.surface.is_none() {
+            self.surface = Some(
+                self.instance
+                    .create_surface(Arc::clone(&self.window))
+                    .map_err(RunError::SurfaceCreation)?,
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn recreate_surface(
+        &mut self,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        config: &AppConfig,
+    ) -> Result<(), RunError> {
+        let previous_format = self.surface_config().map(|config| config.format)?;
+        let replacement = self
+            .instance
+            .create_surface(self.window.clone())
+            .map_err(RunError::SurfaceCreation)?;
+        drop(self.surface.replace(replacement));
+        let replacement_format = self.configure_surface(adapter, device, config)?;
+        if replacement_format != previous_format {
+            return Err(RunError::SurfaceFormatChanged {
+                previous: previous_format,
+                replacement: replacement_format,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn resize(&mut self, size: PhysicalSize<u32>, device: &wgpu::Device) {
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        if let (Some(surface), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
+            surface_config.width = size.width;
+            surface_config.height = size.height;
+            surface.configure(device, surface_config);
+        }
+    }
+
+    pub(crate) fn surface_config(&self) -> Result<&wgpu::SurfaceConfiguration, RunError> {
+        self.surface_config
+            .as_ref()
+            .ok_or_else(|| RunError::Recovery {
+                message: "GPU context requested before surface configuration".to_owned(),
+            })
+    }
+}
+
+pub(crate) struct UiState {
+    pub(crate) context: imgui::Context,
+    pub(crate) platform: dear_imgui_winit::WinitPlatform,
+    pub(crate) multi_viewport: bool,
+    #[cfg(feature = "implot")]
+    pub(crate) implot: Option<implot::PlotContext>,
+    #[cfg(feature = "imnodes")]
+    pub(crate) imnodes: Option<imnodes::Context>,
+    #[cfg(feature = "implot3d")]
+    pub(crate) implot3d: Option<implot3d::Plot3DContext>,
+    pub(crate) docking: DockingController,
+}
+
+impl UiState {
+    pub(crate) fn new<A: Application>(
+        window: &WindowState,
+        config: &AppConfig,
+        application: &mut A,
+    ) -> Result<Self, RunError> {
+        let context = imgui::Context::try_create().map_err(RunError::ImGuiContext)?;
+        let (context, platform) = initialize_configured_ui(
+            application,
+            context,
+            |application, context| {
+                configure_context(context, config);
+                run_application_frame_boundary(
+                    context,
+                    ApplicationStage::ConfigureImgui,
+                    |context| {
+                        let mut init = InitContext {
+                            imgui: context,
+                            window: &window.window,
+                            config,
+                        };
+                        application.configure_imgui(&mut init)
+                    },
+                )?;
+                validate_supported_imgui_config(context, config.multi_viewport)
+            },
+            |_, context| {
+                dear_imgui_winit::WinitPlatform::new(context)
+                    .map_err(|error| platform_error("Winit platform initialization", error))
+            },
+            |_, platform, context| {
+                platform
+                    .attach_window(
+                        Arc::clone(&window.window),
+                        dear_imgui_winit::HiDpiMode::Default,
+                        context,
+                    )
+                    .map_err(|error| platform_error("Winit main-window attachment", error))?;
+                #[cfg(feature = "multi-viewport")]
+                if config.multi_viewport {
+                    platform
+                        .enable_viewports(context)
+                        .map_err(|error| platform_error("Winit viewport initialization", error))?;
+                }
+                Ok(())
+            },
+            |application, context, error| {
+                abort_context_initialization(application, context, &window.window, error)
+            },
+            |application, context, platform, error| {
+                abort_platform_initialization(application, context, &window.window, platform, error)
+            },
+        )?;
+
+        #[cfg(feature = "implot")]
+        let implot = config
+            .addons
+            .with_implot
+            .then(|| implot::PlotContext::create(&context));
+        #[cfg(feature = "imnodes")]
+        let imnodes = config
+            .addons
+            .with_imnodes
+            .then(|| imnodes::Context::create(&context));
+        #[cfg(feature = "implot3d")]
+        let implot3d = config
+            .addons
+            .with_implot3d
+            .then(|| implot3d::Plot3DContext::create(&context));
+
+        Ok(Self {
+            context,
+            platform,
+            multi_viewport: config.multi_viewport,
+            #[cfg(feature = "implot")]
+            implot,
+            #[cfg(feature = "imnodes")]
+            imnodes,
+            #[cfg(feature = "implot3d")]
+            implot3d,
+            docking: DockingController {
+                flags: config.docking.dockspace_flags(),
+            },
+        })
+    }
+
+    pub(crate) fn release_platform(&mut self) -> Result<(), RunError> {
+        self.platform
+            .shutdown(&mut self.context)
+            .map_err(|error| platform_error("Winit platform shutdown", error))
+    }
+
+    pub(crate) fn release_platform_then_teardown_or_quarantine(mut self) -> Result<(), RunError> {
+        if let Err(error) = self.release_platform() {
+            // Platform shutdown can report an ownership conflict after partially observing Context
+            // state. Keep the complete graph alive rather than falling back to Context drop.
+            std::mem::forget(self);
+            return Err(error);
+        }
+        self.teardown_after_platform_release();
+        Ok(())
+    }
+
+    pub(crate) fn teardown_after_platform_release(self) {
+        let Self {
+            context,
+            platform,
+            multi_viewport: _,
+            #[cfg(feature = "implot")]
+            implot,
+            #[cfg(feature = "imnodes")]
+            imnodes,
+            #[cfg(feature = "implot3d")]
+            implot3d,
+            docking: _,
+        } = self;
+        drop(platform);
+        #[cfg(feature = "implot3d")]
+        drop(implot3d);
+        #[cfg(feature = "imnodes")]
+        drop(imnodes);
+        #[cfg(feature = "implot")]
+        drop(implot);
+        drop(context);
+    }
+}
+
+pub(crate) struct GpuState {
+    pub(crate) adapter: wgpu::Adapter,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) renderer: super::renderer::AppRenderer,
+    device_lost: Arc<AtomicBool>,
+    pending_signals: Arc<Mutex<Vec<RuntimeEvent>>>,
+    drain_panicked: bool,
+}
+
+fn drain_gpu_submissions(
+    device_lost: &AtomicBool,
+    drain_panicked: &mut bool,
+    drain: impl FnOnce() -> Result<(), wgpu::PollError>,
+) -> Result<(), RunError> {
+    if device_lost.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    if *drain_panicked {
+        return Err(RunError::GpuInternal {
+            message: "GPU submission drain previously panicked; keeping GPU ownership quarantined"
+                .to_owned(),
+        });
+    }
+    match catch_unwind(AssertUnwindSafe(drain)) {
+        Ok(result) => result.map_err(|error| RunError::GpuInternal {
+            message: format!("waiting for GPU submissions before renderer release: {error}"),
+        }),
+        Err(payload) => {
+            *drain_panicked = true;
+            let detail = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("native GPU submission drain panicked");
+            Err(RunError::GpuInternal {
+                message: format!("waiting for GPU submissions before renderer release: {detail}"),
+            })
+        }
+    }
+}
+
+fn drain_gpu_signal_mailbox(
+    mailbox: &Mutex<Vec<RuntimeEvent>>,
+    device_lost: &AtomicBool,
+    generation: GpuGeneration,
+) -> Vec<RuntimeEvent> {
+    let mut pending = mailbox
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut events = std::mem::take(&mut *pending);
+    // Validation is never evidence of loss. Only the exact generation's device-lost callback
+    // publishes this atomic, including when its Winit wake event has not been dispatched yet.
+    if device_lost.load(Ordering::Acquire)
+        && !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::DeviceLost { .. }))
+    {
+        events.push(RuntimeEvent::DeviceLost {
+            generation,
+            message: "device-lost callback confirmed loss before event dispatch".to_owned(),
+        });
+    }
+    events
+}
+
+fn release_renderer_and_surface<Surface>(
+    surface: &mut Option<Surface>,
+    release_renderer: impl FnOnce() -> Result<(), RunError>,
+) -> Result<(), RunError> {
+    release_renderer()?;
+    drop(surface.take());
+    Ok(())
+}
+
+impl GpuState {
+    pub(crate) fn take_pending_signals(
+        &self,
+        generation: GpuGeneration,
+        poll: bool,
+    ) -> Vec<RuntimeEvent> {
+        if poll {
+            // Surface rejection can precede Winit's delivery of the callback's user event. A
+            // non-blocking poll cannot dispatch DeviceLost until already queued work drains, so
+            // give this exact generation one bounded wait. Timeout preserves the original
+            // validation error; it is never treated as loss evidence.
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                self.device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_millis(250)),
+                })
+            }));
+            if !matches!(result, Ok(Ok(_))) {
+                tracing::warn!(
+                    "GPU callback polling failed after render rejection; preserving the render error unless device loss was confirmed"
+                );
+            }
+        }
+        drain_gpu_signal_mailbox(&self.pending_signals, &self.device_lost, generation)
+    }
+
+    pub(crate) fn release_renderer(
+        &mut self,
+        context: &mut imgui::Context,
+        window: &mut WindowState,
+    ) -> Result<(), RunError> {
+        // Flush uploads even if the application failed before its first rendered frame. Native
+        // device errors can make WGPU's poll panic instead of returning PollError. Keep renderer
+        // and Context ownership intact until the drain succeeds or loss has been confirmed.
+        let device = &self.device;
+        let queue = &self.queue;
+        drain_gpu_submissions(&self.device_lost, &mut self.drain_panicked, || {
+            queue.submit(std::iter::empty());
+            // Renderer teardown must not block the event loop forever when a backend has stopped
+            // making progress. A device-loss callback skips this wait; a live device gets a
+            // bounded drain and reports a retryable GPU error on timeout.
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(GPU_RELEASE_WAIT_TIMEOUT),
+                })
+                .map(|_| ())
+        })?;
+        // A Surface retains WSI configuration for its Device. Destroy that configuration while
+        // its exact GPU generation still owns the Device, before teardown destroys the Device or
+        // any later generation can configure a replacement surface for the same native window.
+        release_renderer_and_surface(&mut window.surface, || self.renderer.shutdown(context))
+    }
+
+    pub(crate) fn teardown(self) {
+        let Self {
+            adapter,
+            device,
+            queue,
+            renderer,
+            device_lost: _,
+            pending_signals: _,
+            drain_panicked: _,
+        } = self;
+        drop(renderer);
+        device.destroy();
+        drop(queue);
+        drop(device);
+        drop(adapter);
+    }
+}
+
+pub(crate) struct RuntimeGeneration {
+    pub(crate) id: GpuGeneration,
+    pub(crate) gpu: GpuState,
+}
+
+impl RuntimeGeneration {
+    pub(crate) fn api(&mut self) -> GpuApi<'_> {
+        GpuApi {
+            device: &self.gpu.device,
+            queue: &self.gpu.queue,
+            renderer: &mut self.gpu.renderer,
+            generation: self.id,
+        }
+    }
+
+    pub(crate) fn context<'a>(
+        &'a mut self,
+        window: &'a WindowState,
+    ) -> Result<GpuContext<'a>, RunError> {
+        Ok(GpuContext {
+            window: &window.window,
+            surface_config: window.surface_config()?,
+            gpu: self.api(),
+        })
+    }
+
+    pub(crate) fn teardown(self) {
+        self.gpu.teardown();
+    }
+}
+
+impl OwnedGpuGeneration for RuntimeGeneration {
+    fn generation(&self) -> GpuGeneration {
+        self.id
+    }
+
+    fn teardown(self) {
+        RuntimeGeneration::teardown(self);
+    }
+}
+
+pub(crate) struct WgpuRuntimeFactory;
+
+impl WgpuRuntimeFactory {
+    pub(crate) fn create(
+        window: &mut WindowState,
+        ui: &mut UiState,
+        config: &AppConfig,
+        event_proxy: EventLoopProxy<RuntimeEvent>,
+        generation: GpuGeneration,
+    ) -> Result<RuntimeGeneration, RunError> {
+        window.ensure_surface()?;
+        let adapter = block_on(
+            window
+                .instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: config.wgpu.power_preference,
+                    compatible_surface: Some(window.surface()?),
+                    apply_limit_buckets: false,
+                    force_fallback_adapter: config.wgpu.force_fallback_adapter,
+                }),
+        )
+        .map_err(RunError::AdapterUnavailable)?;
+        let descriptor = wgpu::DeviceDescriptor {
+            label: config.wgpu.device_label.as_deref(),
+            required_features: config.wgpu.required_features,
+            required_limits: config.wgpu.required_limits.clone(),
+            memory_hints: config.wgpu.memory_hints.clone(),
+            ..Default::default()
+        };
+        let (device, queue) =
+            block_on(adapter.request_device(&descriptor)).map_err(RunError::DeviceRequest)?;
+
+        let pending_signals = Arc::new(Mutex::new(Vec::new()));
+        let fault_signals = Arc::clone(&pending_signals);
+        let fault_proxy = event_proxy.clone();
+        device.on_uncaptured_error(std::sync::Arc::new(move |error| {
+            let kind = match &error {
+                wgpu::Error::OutOfMemory { .. } => GpuFaultKind::OutOfMemory,
+                wgpu::Error::Validation { .. } => GpuFaultKind::Validation,
+                wgpu::Error::Internal { .. } => GpuFaultKind::Internal,
+            };
+            let signal = RuntimeEvent::GpuFault {
+                generation,
+                kind,
+                message: error.to_string(),
+            };
+            fault_signals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(signal.clone());
+            let _ = fault_proxy.send_event(signal);
+        }));
+        let device_lost = Arc::new(AtomicBool::new(false));
+        let callback_device_lost = Arc::clone(&device_lost);
+        let lost_signals = Arc::clone(&pending_signals);
+        device.set_device_lost_callback(move |reason, message| {
+            let signal = RuntimeEvent::DeviceLost {
+                generation,
+                message: format!("{reason:?}: {message}"),
+            };
+            {
+                let mut pending = lost_signals
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                pending.push(signal.clone());
+                callback_device_lost.store(true, Ordering::Release);
+            }
+            let _ = event_proxy.send_event(signal);
+        });
+
+        let format = window.configure_surface(&adapter, &device, config)?;
+        let init_info = dear_imgui_wgpu::WgpuInitInfo::new(device.clone(), queue.clone(), format);
+        #[cfg(feature = "multi-viewport")]
+        let init_info = if config.multi_viewport {
+            init_info
+                .with_instance(window.instance.clone())
+                .with_adapter(adapter.clone())
+        } else {
+            init_info
+        };
+        let mut renderer = dear_imgui_wgpu::WgpuRenderer::new(init_info, &mut ui.context)
+            .map_err(RunError::RendererInit)?;
+        renderer.set_gamma_mode(dear_imgui_wgpu::GammaMode::Auto);
+        #[cfg(feature = "multi-viewport")]
+        renderer.set_viewport_clear_color(wgpu::Color {
+            r: config.clear_color[0] as f64,
+            g: config.clear_color[1] as f64,
+            b: config.clear_color[2] as f64,
+            a: config.clear_color[3] as f64,
+        });
+
+        #[cfg(feature = "multi-viewport")]
+        let renderer = if config.multi_viewport {
+            match dear_imgui_wgpu::multi_viewport::WinitViewportRoute::attach(
+                &mut ui.context,
+                &ui.platform,
+                renderer,
+            ) {
+                Ok(route) => super::renderer::AppRenderer::Multi(route),
+                Err(error) => {
+                    let (error, mut renderer) = error.into_parts();
+                    return Err(preserve_initialization_error(
+                        RunError::Viewport(error),
+                        || {
+                            renderer
+                                .shutdown(&mut ui.context)
+                                .map_err(RunError::RendererRelease)
+                        },
+                    ));
+                }
+            }
+        } else {
+            super::renderer::AppRenderer::Single(renderer)
+        };
+        #[cfg(not(feature = "multi-viewport"))]
+        let renderer = super::renderer::AppRenderer::Single(renderer);
+
+        Ok(RuntimeGeneration {
+            id: generation,
+            gpu: GpuState {
+                adapter,
+                device,
+                queue,
+                renderer,
+                device_lost,
+                pending_signals,
+                drain_panicked: false,
+            },
+        })
+    }
+}
+
+fn configure_context(context: &mut imgui::Context, config: &AppConfig) {
+    if config.restore_previous_geometry {
+        let _ = context.set_ini_filename(config.ini_filename.clone());
+    } else {
+        let _ = context.set_ini_filename(None::<String>);
+    }
+
+    if let Some(theme) = config.theme {
+        let preset = match theme {
+            Theme::Dark => imgui::ThemePreset::Dark,
+            Theme::Light => imgui::ThemePreset::Light,
+            Theme::Classic => imgui::ThemePreset::Classic,
+        };
+        let theme = imgui::Theme {
+            preset,
+            ..Default::default()
+        };
+        theme.apply_to_context(context);
+    }
+
+    let io = context.io_mut();
+    let mut flags = io.config_flags();
+    if config.docking.is_enabled() {
+        flags.insert(ConfigFlags::DOCKING_ENABLE);
+    }
+    if config.multi_viewport {
+        flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
+    }
+    if let Some(extra) = config.io_config_flags {
+        flags = ConfigFlags::from_bits_retain(flags.bits() | extra.bits());
+    }
+    io.set_config_flags(flags);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    use dear_imgui_rs::{FrameLifecycleState, FramePrepareOptions};
+
+    use super::{
+        drain_gpu_signal_mailbox, drain_gpu_submissions, initialize_configured_ui, platform_error,
+        preserve_initialization_error, release_renderer_and_surface,
+        run_application_frame_boundary,
+    };
+    use crate::{ApplicationStage, RunError};
+
+    #[test]
+    fn renderer_release_destroys_surface_before_its_device_owner() {
+        struct SurfaceProbe {
+            device_alive: Rc<Cell<bool>>,
+            released: Rc<Cell<bool>>,
+            events: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl Drop for SurfaceProbe {
+            fn drop(&mut self) {
+                assert!(
+                    self.device_alive.get(),
+                    "WSI configuration must release while its Device is alive"
+                );
+                self.released.set(true);
+                self.events.borrow_mut().push("surface");
+            }
+        }
+        struct DeviceProbe {
+            alive: Rc<Cell<bool>>,
+            surface_released: Rc<Cell<bool>>,
+            events: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl Drop for DeviceProbe {
+            fn drop(&mut self) {
+                assert!(
+                    self.surface_released.get(),
+                    "Device teardown must follow Surface retirement"
+                );
+                self.alive.set(false);
+                self.events.borrow_mut().push("device");
+            }
+        }
+        let alive = Rc::new(Cell::new(true));
+        let released = Rc::new(Cell::new(false));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let device = DeviceProbe {
+            alive: Rc::clone(&alive),
+            surface_released: Rc::clone(&released),
+            events: Rc::clone(&events),
+        };
+        let mut surface = Some(SurfaceProbe {
+            device_alive: alive,
+            released,
+            events: Rc::clone(&events),
+        });
+        release_renderer_and_surface(&mut surface, || {
+            events.borrow_mut().push("renderer");
+            Ok(())
+        })
+        .unwrap();
+        assert!(surface.is_none());
+        drop(device);
+        assert_eq!(*events.borrow(), ["renderer", "surface", "device"]);
+    }
+
+    #[test]
+    fn renderer_release_failure_keeps_surface_for_the_same_live_generation() {
+        let mut surface = Some(41);
+        let result = release_renderer_and_surface(&mut surface, || {
+            Err(RunError::Recovery {
+                message: "renderer reset permit is still borrowed".to_owned(),
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(surface, Some(41));
+    }
+
+    #[test]
+    fn validation_signal_does_not_invent_device_loss() {
+        let generation = crate::GpuGeneration(4);
+        let pending = Mutex::new(vec![super::RuntimeEvent::GpuFault {
+            generation,
+            kind: super::GpuFaultKind::Validation,
+            message: "invalid commands".to_owned(),
+        }]);
+        let lost = AtomicBool::new(false);
+        let signals = drain_gpu_signal_mailbox(&pending, &lost, generation);
+        assert!(
+            matches!(signals.as_slice(), [super::RuntimeEvent::GpuFault { generation: actual, kind: super::GpuFaultKind::Validation, .. }] if *actual == generation)
+        );
+        assert!(drain_gpu_signal_mailbox(&pending, &lost, generation).is_empty());
+    }
+
+    #[test]
+    fn confirmed_loss_is_available_before_the_winit_event_is_dispatched() {
+        let generation = crate::GpuGeneration(5);
+        let pending = Mutex::new(vec![super::RuntimeEvent::DeviceLost {
+            generation,
+            message: "driver loss".to_owned(),
+        }]);
+        let lost = AtomicBool::new(true);
+        let signals = drain_gpu_signal_mailbox(&pending, &lost, generation);
+        assert!(
+            matches!(signals.as_slice(), [super::RuntimeEvent::DeviceLost { generation: actual, message }] if *actual == generation && message == "driver loss")
+        );
+        // The exact generation remains unusable even if a prior event-loop turn drained its wake.
+        let signals = drain_gpu_signal_mailbox(&pending, &lost, generation);
+        assert!(
+            matches!(signals.as_slice(), [super::RuntimeEvent::DeviceLost { generation: actual, .. }] if *actual == generation)
+        );
+    }
+
+    #[test]
+    fn known_device_loss_skips_gpu_submission_drain() {
+        let device_lost = AtomicBool::new(true);
+        let mut drain_panicked = false;
+        drain_gpu_submissions(&device_lost, &mut drain_panicked, || {
+            panic!("a lost device must not receive new work or waits")
+        })
+        .unwrap();
+        assert!(!drain_panicked);
+    }
+
+    #[test]
+    fn gpu_drain_panic_without_confirmed_loss_blocks_teardown_retries() {
+        let device_lost = AtomicBool::new(false);
+        let mut drain_panicked = false;
+        let error = drain_gpu_submissions(&device_lost, &mut drain_panicked, || {
+            panic!("injected native GPU wait failure")
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected native GPU wait failure")
+        );
+        assert!(drain_panicked);
+        let retry_called = Cell::new(false);
+        let retry = drain_gpu_submissions(&device_lost, &mut drain_panicked, || {
+            retry_called.set(true);
+            Ok(())
+        });
+        assert!(matches!(retry, Err(RunError::GpuInternal { .. })));
+        assert!(!retry_called.get());
+    }
+
+    #[test]
+    fn device_loss_during_gpu_drain_panic_allows_later_release() {
+        let device_lost = AtomicBool::new(false);
+        let mut drain_panicked = false;
+        let error = drain_gpu_submissions(&device_lost, &mut drain_panicked, || {
+            device_lost.store(true, Ordering::Release);
+            panic!("injected device loss during native wait")
+        })
+        .unwrap_err();
+        assert!(matches!(error, RunError::GpuInternal { .. }));
+        assert!(drain_panicked);
+        drain_gpu_submissions(&device_lost, &mut drain_panicked, || {
+            panic!("retry must release the lost device without draining it again")
+        })
+        .unwrap();
+    }
+
+    #[derive(Debug)]
+    struct TestPlatform(Rc<Cell<usize>>);
+
+    impl Drop for TestPlatform {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[derive(Default)]
+    struct InitializationProbe {
+        configured: usize,
+        shutdown_calls: usize,
+    }
+
+    fn prepared_context() -> (
+        dear_imgui_rs::Context,
+        dear_imgui_rs::render::SynchronousRendererConsumer,
+    ) {
+        let mut context = dear_imgui_rs::Context::create();
+        context.prepare_frame(
+            FramePrepareOptions::new([640.0, 480.0], 1.0 / 60.0).renderer_has_textures(),
+        );
+        let consumer = context
+            .create_synchronous_renderer_consumer()
+            .expect("the test renderer consumer must attach");
+        (context, consumer)
+    }
+
+    fn leak_open_frame(context: &mut dear_imgui_rs::Context) {
+        let frame = context.begin_frame();
+        std::mem::forget(frame);
+    }
+
+    #[test]
+    fn application_boundary_rejects_and_closes_a_leaked_frame() {
+        let _guard = crate::runtime::imgui_test_guard();
+        let (mut context, _consumer) = prepared_context();
+        let error = run_application_frame_boundary(
+            &mut context,
+            ApplicationStage::PrepareFrame,
+            |context| {
+                leak_open_frame(context);
+                Ok(())
+            },
+        )
+        .expect_err("frame ownership changes must be rejected");
+
+        assert!(matches!(
+            error,
+            RunError::ImGuiFrameOwnership {
+                stage: ApplicationStage::PrepareFrame,
+                before,
+                after,
+            } if before.state() == FrameLifecycleState::Idle
+                && after.state() == FrameLifecycleState::InFrame
+        ));
+        assert_eq!(context.frame_lifecycle_state(), FrameLifecycleState::Idle);
+    }
+
+    #[test]
+    fn application_boundary_rejects_an_idle_to_idle_frame_round_trip() {
+        let _guard = crate::runtime::imgui_test_guard();
+        let (mut context, _consumer) = prepared_context();
+        let error = run_application_frame_boundary(
+            &mut context,
+            ApplicationStage::ConfigureImgui,
+            |context| {
+                drop(context.begin_frame());
+                Ok(())
+            },
+        )
+        .expect_err("opening and ending a frame inside a callback must remain observable");
+
+        assert!(matches!(
+            error,
+            RunError::ImGuiFrameOwnership { before, after, .. }
+                if before.state() == FrameLifecycleState::Idle
+                    && after.state() == FrameLifecycleState::Idle
+                    && before.context_id() == after.context_id()
+                    && before != after
+        ));
+        assert_eq!(context.frame_lifecycle_state(), FrameLifecycleState::Idle);
+    }
+
+    #[test]
+    fn application_boundary_preserves_the_callback_error_and_closes_a_leaked_frame() {
+        let _guard = crate::runtime::imgui_test_guard();
+        let (mut context, _consumer) = prepared_context();
+        let error = run_application_frame_boundary(
+            &mut context,
+            ApplicationStage::ConfigureImgui,
+            |context| {
+                leak_open_frame(context);
+                Err::<(), _>(RunError::application_message(
+                    ApplicationStage::ConfigureImgui,
+                    "primary failure",
+                ))
+            },
+        )
+        .expect_err("the original callback failure must remain primary");
+
+        assert_eq!(
+            error.application_stage(),
+            Some(ApplicationStage::ConfigureImgui)
+        );
+        assert_eq!(
+            error.to_string(),
+            "application callback failed during configure_imgui: primary failure"
+        );
+        assert_eq!(context.frame_lifecycle_state(), FrameLifecycleState::Idle);
+    }
+
+    #[test]
+    fn initialization_cleanup_runs_once_and_preserves_the_primary_error() {
+        let cleanup_calls = Cell::new(0);
+        let primary =
+            RunError::application_message(ApplicationStage::ConfigureImgui, "primary failure");
+
+        let error = preserve_initialization_error(primary, || {
+            cleanup_calls.set(cleanup_calls.get() + 1);
+            Err(RunError::application_message(
+                ApplicationStage::Shutdown,
+                "cleanup failure",
+            ))
+        });
+
+        assert_eq!(cleanup_calls.get(), 1);
+        assert_eq!(
+            error.to_string(),
+            "application callback failed during configure_imgui: primary failure"
+        );
+    }
+
+    #[test]
+    fn successful_initialization_does_not_run_cleanup() {
+        let cleanup_calls = Cell::new(0);
+        let value = 41_u8;
+
+        let result = Ok(value).map_err(|error: RunError| {
+            preserve_initialization_error(error, || {
+                cleanup_calls.set(cleanup_calls.get() + 1);
+                Ok(())
+            })
+        });
+
+        assert!(matches!(result, Ok(actual) if actual == value));
+        assert_eq!(cleanup_calls.get(), 0);
+    }
+
+    #[test]
+    fn platform_constructor_failure_after_configuration_runs_shutdown_once() {
+        let _guard = crate::runtime::imgui_test_guard();
+        let mut probe = InitializationProbe::default();
+        let mut context = dear_imgui_rs::Context::create();
+        let mut existing_platform = Some(
+            dear_imgui_winit::WinitPlatform::new(&mut context)
+                .expect("the first platform attachment must succeed"),
+        );
+
+        let result = initialize_configured_ui(
+            &mut probe,
+            context,
+            |state, _| {
+                state.configured += 1;
+                Ok(())
+            },
+            |_, context| {
+                dear_imgui_winit::WinitPlatform::new(context)
+                    .map_err(|error| platform_error("Winit platform initialization", error))
+            },
+            |_, _, _| unreachable!("attach must not run after constructor failure"),
+            |state, mut context, primary| {
+                preserve_initialization_error(primary, || {
+                    state.shutdown_calls += 1;
+                    existing_platform
+                        .take()
+                        .expect("the original platform must still own its attachment")
+                        .shutdown(&mut context)
+                        .expect("the original platform shutdown must succeed");
+                    drop(context);
+                    Err(RunError::application_message(
+                        ApplicationStage::Shutdown,
+                        "injected cleanup failure",
+                    ))
+                })
+            },
+            |_, _, _, _| unreachable!("platform cleanup requires a constructed platform"),
+        );
+        let error = result
+            .err()
+            .expect("the second platform attachment must be rejected");
+
+        assert_eq!(probe.configured, 1);
+        assert_eq!(probe.shutdown_calls, 1);
+        assert!(matches!(
+            error,
+            RunError::Platform {
+                operation: "Winit platform initialization",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn main_window_attachment_failure_after_configuration_runs_shutdown_once() {
+        let _guard = crate::runtime::imgui_test_guard();
+        let dropped_platforms = Rc::new(Cell::new(0));
+        let mut probe = InitializationProbe::default();
+
+        let error = initialize_configured_ui(
+            &mut probe,
+            dear_imgui_rs::Context::create(),
+            |state, _| {
+                state.configured += 1;
+                Ok(())
+            },
+            |_, _| Ok(TestPlatform(Rc::clone(&dropped_platforms))),
+            |_, _, _| {
+                Err(RunError::Recovery {
+                    message: "injected attachment failure".to_owned(),
+                })
+            },
+            |_, _, _| unreachable!("constructor cleanup must not run after attachment failure"),
+            |state, context, platform, primary| {
+                preserve_initialization_error(primary, || {
+                    state.shutdown_calls += 1;
+                    drop(platform);
+                    drop(context);
+                    Err(RunError::application_message(
+                        ApplicationStage::Shutdown,
+                        "injected cleanup failure",
+                    ))
+                })
+            },
+        )
+        .expect_err("the attachment failure must be reported");
+
+        assert_eq!(probe.configured, 1);
+        assert_eq!(probe.shutdown_calls, 1);
+        assert_eq!(dropped_platforms.get(), 1);
+        assert_eq!(
+            error.to_string(),
+            "GPU generation recovery failed: injected attachment failure"
+        );
+    }
+}

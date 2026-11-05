@@ -576,8 +576,6 @@ checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 [[package]]
 name = "dear-app"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8575cf165490444281fb57b17605914f009215d0fcb2b63404ce061aee93678f"
 dependencies = [
  "dear-imgui-rs",
  "dear-imgui-wgpu",
