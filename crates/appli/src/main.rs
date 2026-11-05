@@ -451,6 +451,13 @@ impl Monteur {
         self.message = format!("Projet « {nom} » créé dans {} : Fichier › Ajouter une prise au projet.", self.dossier.chemin.display());
     }
 
+    /// Retour à Copies d'écran : ce qu'on filme ensuite n'ira pas dans le projet.
+    fn fermer_projet(&mut self) {
+        self.fermer_prise();
+        self.changer_de_dossier(self.copies.clone());
+        self.message = "Projet fermé : les prochaines prises arrivent dans Copies d'écran.".into();
+    }
+
     fn fermer_prise(&mut self) {
         if let Some(mut p) = self.prise.take()
             && let Some(e) = p.ecrire_si_besoin(true)
@@ -930,6 +937,15 @@ impl Monteur {
         }
         if ui.small_button("Ouvrir le dossier") {
             self.ouvrir_le_dossier();
+        }
+        if self.dossier.chemin.starts_with(&self.racine) {
+            ui.same_line();
+            if ui.small_button("Fermer le projet") {
+                self.fermer_projet();
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Tout est déjà enregistré. Retour à Copies d'écran : ce que tu filmes ensuite n'ira pas dans ce projet.");
+            }
         }
         ui.spacing();
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
@@ -1632,6 +1648,9 @@ impl Application for Monteur {
                 let dans_projet = self.dossier.chemin.starts_with(&self.racine);
                 if ui.menu_item_enabled_selected_no_shortcut("Ajouter une prise au projet…", false, dans_projet) {
                     self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Vidéos (*.mp4 *.mkv *.mov)"));
+                }
+                if ui.menu_item_enabled_selected_no_shortcut("Fermer le projet", false, dans_projet) {
+                    self.fermer_projet();
                 }
                 if ui.menu_item("Ouvrir le dossier sur le disque") {
                     self.ouvrir_le_dossier();
