@@ -467,7 +467,7 @@ impl Monteur {
             self.filmer_ecran();
         }
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
-        let duree = self.capture.take().and_then(|c| c.temps()).unwrap_or(0.0);
+        let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
         self.message = match fin {
             capture::Fin::Prise(p) => {
                 self.a_changer = Some(self.dossier.chemin.clone());
@@ -724,7 +724,11 @@ impl Monteur {
             let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ERREUR));
             let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::vec(charte::ERREUR, 0.85));
             let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::vec(charte::ERREUR, 0.7));
-            let texte = c.temps().map_or("Annuler le choix".to_string(), |t| format!("Arrêter {}", chrono_court(t)));
+            let texte = match c.temps() {
+                _ if c.en_finition() => "Finition du son…".to_string(),
+                Some(t) => format!("Arrêter {}", chrono_court(t)),
+                None => "Annuler le choix".to_string(),
+            };
             if ui.button_with_size(format!("{texte}###arret_capture"), [0.0, 30.0]) {
                 c.arreter();
             }
