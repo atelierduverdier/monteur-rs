@@ -15,7 +15,8 @@ fn main() {
     };
     let debut = Instant::now();
     let suivi = rendu::Suivi::default();
-    match rendu::rendre(Path::new(&a[1]), &m, Path::new(&a[3]), &suivi) {
+    let brut = noyau::voix::Voix::aucune();
+    match rendu::rendre(Path::new(&a[1]), &m, &brut, &noyau::prereglages::PREREGLAGES[0], Path::new(&a[3]), &suivi) {
         Ok(()) => {
             let s = debut.elapsed().as_secs_f64();
             let n = suivi.faites.load(std::sync::atomic::Ordering::Relaxed);

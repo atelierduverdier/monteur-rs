@@ -11,6 +11,7 @@ mod miniatures;
 mod raccourci;
 mod scenario;
 mod vignette;
+mod voix;
 mod vue;
 mod youtube;
 
@@ -149,6 +150,22 @@ fn bouton_forme(ui: &Ui, id: &str, forme: Forme, primaire: bool, aide: &str) -> 
 const RUBAN: f32 = 44.0;
 
 /// Un rendu en fond : on continue de monter pendant ce temps.
+/// Un rendu de la file : montage et voix figés au moment où il y entre.
+enum EtatTravail {
+    Attente,
+    EnCours,
+    Fini { reussi: bool, secondes: f64 },
+}
+
+struct Travail {
+    nom: String,
+    video: PathBuf,
+    montage: noyau::montage::Montage,
+    voix: noyau::voix::Voix,
+    pre: usize,
+    etat: EtatTravail,
+}
+
 struct RenduEnCours {
     nom: String,
     suivi: Arc<rendu::Suivi>,
@@ -191,6 +208,10 @@ struct Monteur {
     bande: miniatures::Bande,
     bande_neuve: bool,
     rendu: Option<RenduEnCours>,
+    file: Vec<Travail>,
+    fenetre_rendre: bool,
+    pre_choisi: usize,
+    voix: voix::FenetreVoix,
     /// L'écran en train d'être filmé.
     capture: Option<capture::Capture>,
     /// Filmer VerdierCAM : l'enregistrement attend que sa fenêtre soit ouverte.
@@ -231,6 +252,10 @@ fn dossier_de_depart(fiches: &Fiches) -> PathBuf {
 
 /// Le temps laissé à VerdierCAM pour ouvrir sa fenêtre : le dialogue ne liste que celles qui existent.
 const DELAI_VERDIERCAM: std::time::Duration = std::time::Duration::from_secs(4);
+
+fn chemin_voix() -> PathBuf {
+    chemin_fiches().with_file_name("voix.json")
+}
 
 fn chemin_jeton_portail() -> PathBuf {
     chemin_fiches().with_file_name("portail-capture")
@@ -305,6 +330,10 @@ impl Monteur {
             bande: miniatures::Bande::vide(),
             bande_neuve: false,
             rendu: None,
+            file: Vec::new(),
+            fenetre_rendre: false,
+            pre_choisi: 0,
+            voix: voix::FenetreVoix::new(&chemin_voix()),
             capture: None,
             capture_prevue: None,
             raccourci: None,
@@ -418,22 +447,143 @@ impl Monteur {
     }
 
     /// Rend la prise ouverte en fond, telle qu'elle est maintenant.
+    /// Le rendu de toujours, sans passer par la fenêtre.
     fn rendre(&mut self) {
+        self.mettre_en_file(0, false);
+    }
+
+    /// `devant` : avant ceux qui attendent. Il part aussitôt si rien ne tourne.
+    fn mettre_en_file(&mut self, pre: usize, devant: bool) {
+        self.enregistrer();
+        let Some(p) = &self.prise else { return };
+        let travail = Travail {
+            nom: miniatures::nom_lisible(&p.video.file_stem().unwrap_or_default().to_string_lossy()),
+            video: p.video.clone(),
+            montage: p.montage.clone(),
+            voix: self.voix.reglages.clone(),
+            pre,
+            etat: EtatTravail::Attente,
+        };
+        let rang = if devant { self.file.iter().position(|t| matches!(t.etat, EtatTravail::Attente)).unwrap_or(self.file.len()) } else { self.file.len() };
+        self.file.insert(rang, travail);
+        self.lancer_suivant();
+        self.message = "Rendu en file : tu peux continuer à monter pendant ce temps.".into();
+    }
+
+    fn lancer_suivant(&mut self) {
         if self.rendu.is_some() {
             return;
         }
-        self.enregistrer();
-        let Some(p) = &self.prise else { return };
-        let (video, montage) = (p.video.clone(), p.montage.clone());
+        let Some(t) = self.file.iter_mut().find(|t| matches!(t.etat, EtatTravail::Attente)) else { return };
+        t.etat = EtatTravail::EnCours;
+        let (video, montage, voix, pre) = (t.video.clone(), t.montage.clone(), t.voix.clone(), noyau::prereglages::PREREGLAGES[t.pre]);
         let suivi = Arc::new(rendu::Suivi::default());
         let (envoi, fin) = mpsc::channel();
         let s = suivi.clone();
-        let nom = miniatures::nom_lisible(&video.file_stem().unwrap_or_default().to_string_lossy());
+        let nom = t.nom.clone();
         let fil = std::thread::spawn(move || {
-            let _ = envoi.send(rendu::monter(&video, &montage, &s).map_err(|e| e.0));
+            let _ = envoi.send(rendu::monter(&video, &montage, &voix, &pre, &s).map_err(|e| e.0));
         });
         self.rendu = Some(RenduEnCours { nom, suivi, fin, fil, debut: std::time::Instant::now() });
-        self.message = "Rendu lancé : tu peux continuer à monter pendant ce temps.".into();
+    }
+
+    /// Préréglages à gauche, ce qu'ils font à droite, la file en bas.
+    fn panneau_rendre(&mut self, ui: &Ui) {
+        use noyau::prereglages::PREREGLAGES;
+        let bas = 190.0 + 6.0 * self.file.len().min(4) as f32;
+        let haut = (ui.content_region_avail()[1] - bas).max(180.0);
+        ui.child_window("presets").size([280.0, haut]).build(ui, || {
+            ui.text_colored(charte::c(charte::TEXT_2), "Préréglages");
+            for (i, p) in PREREGLAGES.iter().enumerate() {
+                if ui.selectable_config(format!("##pre{i}")).selected(self.pre_choisi == i).size([0.0, 52.0]).build() {
+                    self.pre_choisi = i;
+                }
+                let a = ui.item_rect_min();
+                let dl = ui.get_window_draw_list();
+                dl.add_text([a[0] + 8.0, a[1] + 6.0], charte::c(charte::TEXT), p.nom);
+                let petit: String = p.detail.chars().take(44).collect();
+                dl.add_text([a[0] + 8.0, a[1] + 28.0], charte::c(charte::TEXT_2), petit);
+            }
+        });
+        ui.same_line();
+        let pre = PREREGLAGES[self.pre_choisi];
+        ui.child_window("details").size([0.0, haut]).border(true).build(ui, || {
+            let ligne = |nom: &str, valeur: String| {
+                ui.text_colored(charte::c(charte::TEXT_2), nom);
+                ui.same_line_with_pos(130.0);
+                ui.text(valeur);
+            };
+            let v = &self.voix.reglages;
+            ui.text("Image");
+            ligne("Réglage", pre.detail.to_string());
+            ligne("Codeur", pre.x264.map_or("GIF".to_string(), |(crf, vitesse)| format!("H.264 x264 · qualité {crf} · {vitesse}")));
+            ui.spacing();
+            ui.text("Son");
+            if pre.son {
+                ligne("Niveau visé", if v.niveau { format!("{:.0} LUFS · crête {:.1} dB", v.niveau_lufs, v.crete_db) } else { "non réglé".to_string() });
+                ligne("Voix", if v.filtres().is_some() { "nettoyée".to_string() } else { "telle quelle".to_string() });
+            } else {
+                ligne("Son", "aucun".to_string());
+            }
+            if ui.small_button("Nettoyer la voix…") {
+                self.voix.ouvrir();
+            }
+            ui.spacing();
+            ui.text("À côté de la vidéo");
+            ligne("Vignette en tête", if pre.youtube { "3 s, si elle est écrite".to_string() } else { "non".to_string() });
+            ligne("Chapitres", "onglet YouTube".to_string());
+            if let Some(d) = pre.duree_max {
+                ligne("Durée", format!("{d:.0} s au plus"));
+            }
+            ui.spacing();
+            let sortie = self.prise.as_ref().map_or("ouvre une prise".to_string(), |p| noyau::chemin_derive(&p.video, pre.suffixe).display().to_string());
+            ui.text_colored(charte::c(charte::TEXT_2), "Sortie");
+            ui.text_wrapped(sortie);
+        });
+        ui.spacing();
+        ui.text_colored(charte::c(charte::TEXT_2), "File d'attente : les rendus tournent en fond, tu continues à monter.");
+        let mut retirer = None;
+        ui.child_window("file").size([0.0, -40.0]).border(true).build(ui, || {
+            if self.file.is_empty() {
+                ui.text_colored(charte::c(charte::TEXT_DISABLED), "Rien pour l'instant.");
+            }
+            for (i, t) in self.file.iter().enumerate() {
+                let _id = ui.push_id(i as i32);
+                ui.text(&t.nom);
+                ui.same_line_with_pos(240.0);
+                ui.text_colored(charte::c(charte::TEXT_2), PREREGLAGES[t.pre].nom);
+                ui.same_line_with_pos(430.0);
+                match t.etat {
+                    EtatTravail::Attente => {
+                        ui.text_colored(charte::c(charte::TEXT_2), "en attente");
+                        ui.same_line();
+                        if ui.small_button("Retirer") {
+                            retirer = Some(i);
+                        }
+                    }
+                    EtatTravail::EnCours => {
+                        let f = self.rendu.as_ref().map_or(0.0, |r| r.suivi.fraction());
+                        ui.progress_bar(f as f32).size([200.0, 16.0]).build();
+                        ui.same_line();
+                        let reste = self.rendu.as_ref().map_or(0.0, |r| r.debut.elapsed().as_secs_f64()) * (1.0 - f) / f.max(0.01);
+                        ui.text_colored(charte::c(charte::CHIFFRE_SAISIE), format!("{:.0} % · reste {}", f * 100.0, chrono_court(reste)));
+                    }
+                    EtatTravail::Fini { reussi: true, secondes } => ui.text_colored(charte::c(charte::SUCCES_TEXTE), format!("fini en {}", chrono_court(secondes))),
+                    EtatTravail::Fini { reussi: false, .. } => ui.text_colored(charte::c(charte::ERREUR), "échec ou arrêt"),
+                }
+            }
+        });
+        if let Some(i) = retirer {
+            self.file.remove(i);
+        }
+        let pret = self.prise.is_some();
+        if ui.button_with_size("Ajouter à la file", [170.0, 30.0]) && pret {
+            self.mettre_en_file(self.pre_choisi, false);
+        }
+        ui.same_line();
+        if ui.button_with_size("Rendre maintenant", [170.0, 30.0]) && pret {
+            self.mettre_en_file(self.pre_choisi, true);
+        }
     }
 
     /// Lance l'envoi de la prise ouverte, en privé.
@@ -823,12 +973,18 @@ impl Monteur {
             self.message = "Préparation en cours : voix, mouvement de l'image, gestes, silences…".into();
         }
         ui.same_line();
-        let peut_rendre = self.prise.is_some() && self.rendu.is_none();
-        if ui.button_with_size("Rendre la vidéo", [0.0, 30.0]) && peut_rendre {
-            self.rendre();
+        if ui.button_with_size("Rendre…", [0.0, 30.0]) {
+            self.fenetre_rendre = true;
         }
         if ui.is_item_hovered() {
-            ui.tooltip_text("Écrit la vidéo montée à côté de la prise, puis la version avec vignette si la vignette existe.");
+            ui.tooltip_text("Préréglages et file d'attente.");
+        }
+        ui.same_line();
+        if ui.button_with_size("Voix…", [0.0, 30.0]) {
+            self.voix.ouvrir();
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Nettoyer la voix, écouter avant et après.");
         }
         ui.same_line();
         if let Some(c) = &mut self.capture {
@@ -1252,7 +1408,6 @@ impl Monteur {
                 change |= ui.checkbox("Mettre le réglage en lumière", &mut r.mettre_en_lumiere);
                 change |= ui.checkbox("Montrer les sous-titres", &mut r.montrer_sous_titres);
                 change |= ui.checkbox("Incruster les sous-titres dans l'image", &mut r.incruster_sous_titres);
-                change |= ui.checkbox("Volume égal (référence YouTube)", &mut r.volume_egal);
                 let mut cale = r.decalage_journal;
                 if nombre(ui, "Calage des gestes (s)", &mut cale, 0.05) {
                     r.decalage_journal = cale;
@@ -1339,12 +1494,16 @@ impl Application for Monteur {
             if let Some(r) = self.rendu.take() {
                 let duree = r.debut.elapsed().as_secs_f64();
                 let _ = r.fil.join();
+                if let Some(t) = self.file.iter_mut().find(|t| matches!(t.etat, EtatTravail::EnCours)) {
+                    t.etat = EtatTravail::Fini { reussi: fini.is_ok(), secondes: duree };
+                }
                 self.message = match fini {
                     Ok(compte) => format!("{compte} En {:.0} s.", duree),
                     Err(e) => e,
                 };
             }
             self.a_changer = Some(self.dossier.chemin.clone());
+            self.lancer_suivant();
         }
         if let Some(r) = &self.prise_choisie
             && let Ok(chemin) = r.try_recv()
@@ -1493,8 +1652,8 @@ impl Application for Monteur {
                 if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
                     self.enregistrer();
                 }
-                if ui.menu_item_enabled_selected_no_shortcut("Rendre la vidéo", false, self.prise.is_some() && self.rendu.is_none()) {
-                    self.rendre();
+                if ui.menu_item("Rendre…") {
+                    self.fenetre_rendre = true;
                 }
                 m.end();
             }
@@ -1519,6 +1678,9 @@ impl Application for Monteur {
             }
             if let Some(m) = ui.begin_menu("Montage") {
                 let pret = self.prise.as_ref().is_some_and(|p| p.preparation.is_none());
+                if ui.menu_item("Nettoyer la voix…") {
+                    self.voix.ouvrir();
+                }
                 if ui.menu_item_enabled_selected_no_shortcut("Préparer le montage", false, pret)
                     && let Some(p) = &mut self.prise
                 {
@@ -1623,6 +1785,17 @@ impl Application for Monteur {
         }
         self.boite_projet(ui);
         self.boite_corbeille(ui);
+        if self.fenetre_rendre {
+            let mut ouverte = true;
+            ui.window("Rendre le montage###rendre").opened(&mut ouverte).size([940.0, 640.0], Condition::FirstUseEver).build(|| self.panneau_rendre(ui));
+            self.fenetre_rendre = ouverte;
+        }
+        let (video, t) = self.prise.as_ref().map_or((None, 0.0), |p| (Some(p.video.clone()), p.lecteur.position()));
+        if self.voix.dessiner(ui, video.as_deref(), t, &chemin_voix(), &mut self.message)
+            && let Some(p) = &mut self.prise
+        {
+            p.lecteur.arreter();
+        }
 
         // La barre d'état.
         ui.window("etat")

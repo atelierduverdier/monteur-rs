@@ -19,8 +19,10 @@ use composeur::dessin::{Compositeur, R};
 use composeur::police::Polices;
 use noyau::Erreur;
 use noyau::montage::{Insertion, Montage};
+use noyau::prereglages::Prereglage;
 use noyau::sous_titres::{image_gardee, son_retire};
 use noyau::videos::{self, Infos};
+use noyau::voix::Voix;
 use tiny_skia::{IntSize, Pixmap};
 
 /// Où en est un rendu, lisible depuis un autre fil.
@@ -33,9 +35,15 @@ pub struct Suivi {
     pub arret: AtomicBool,
     /// Après le rendu : on colle la vignette.
     pub vignette: AtomicBool,
+    /// La durée d'un court ou d'un GIF est atteinte : la lecture s'arrête, le rendu n'est pas perdu.
+    pub assez: AtomicBool,
 }
 
 impl Suivi {
+    fn fin_de_lecture(&self) -> bool {
+        self.arret.load(Ordering::Relaxed) || self.assez.load(Ordering::Relaxed)
+    }
+
     pub fn fraction(&self) -> f64 {
         let t = self.total.load(Ordering::Relaxed).max(1);
         (self.faites.load(Ordering::Relaxed) as f64 / t as f64).min(1.0)
@@ -124,7 +132,7 @@ fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], volume: Option<&str>) -> Vec<String> {
+pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], volume: Option<&str>, pre: &Prereglage) -> Vec<String> {
     let mut cmd = vec![
         s("ffmpeg"), s("-v"), s("error"), s("-y"), s("-nostats"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgba"),
         s("-s"), format!("{l}x{h}"), s("-r"), s(ips), s("-i"), s("-"),
@@ -143,39 +151,101 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
     } else {
         cmd.extend([s("-map"), s("0:v")]);
     }
-    cmd.extend(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart"].map(String::from));
+    if let Some(f) = pre.image {
+        cmd.extend([s("-vf"), s(f)]);
+    }
+    if let Some((crf, vitesse)) = pre.x264 {
+        cmd.extend(["-c:v", "libx264", "-crf", crf, "-preset", vitesse, "-pix_fmt", "yuv420p", "-movflags", "+faststart"].map(String::from));
+    }
     cmd.push(sortie.to_string_lossy().into_owned());
     cmd
 }
 
-/// Volume visé : −14 LUFS, la référence de YouTube ; crêtes à −1 dB.
-const VOLUME: &str = "I=-14:TP=-1:LRA=11";
-
-/// Mesure le son monté (premier passage de `loudnorm`) et rend le filtre qui l'amène au volume
-/// visé. `None` : rien à mesurer, ou un silence.
-fn filtre_volume(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon]) -> Option<String> {
+/// La chaîne de la voix pour tout le son monté : nettoyage, puis niveau mesuré (premier passage de
+/// `loudnorm`, repris au second). `None` : rien à appliquer.
+fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], voix: &Voix) -> Option<String> {
+    let nettoyage = voix.filtres();
+    if !voix.niveau {
+        return nettoyage;
+    }
     let mut cmd = vec![s("-hide_banner"), s("-nostats"), s("-f"), s("lavfi"), s("-i"), s("nullsrc=s=2x2:d=0.04"), s("-i"), video.to_string_lossy().into_owned()];
     for c in clips.iter().filter(|c| c.son) {
         cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
     }
-    let graphe = format!("{};[a]loudnorm={VOLUME}:print_format=json[mesure]", graphe_son(retire, clips));
+    let avant = nettoyage.as_ref().map(|f| format!("{f},")).unwrap_or_default();
+    let graphe = format!("{};[a]{avant}loudnorm={}:print_format=json[mesure]", graphe_son(retire, clips), voix.cible());
     cmd.extend([s("-filter_complex"), graphe, s("-map"), s("[mesure]"), s("-f"), s("null"), s("-")]);
-    let sortie = Command::new("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok()?;
-    filtre_depuis_mesure(&String::from_utf8_lossy(&sortie.stderr))
+    let sortie = Command::new("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok();
+    let niveau = sortie.and_then(|o| filtre_depuis_mesure(&String::from_utf8_lossy(&o.stderr), voix));
+    match (avant.is_empty(), niveau) {
+        (_, None) => nettoyage,
+        (true, Some(n)) => Some(n),
+        (false, Some(n)) => Some(format!("{avant}{n}")),
+    }
 }
 
-/// Le bloc JSON que `loudnorm` écrit en fin de sortie d'erreur, repris dans le second passage.
-fn filtre_depuis_mesure(journal: &str) -> Option<String> {
+/// Le bloc JSON que `loudnorm` écrit en fin de sortie d'erreur.
+fn lire_mesure(journal: &str) -> Option<[f64; 5]> {
     let bloc = &journal[journal.rfind('{')?..=journal.rfind('}')?];
     let m: serde_json::Value = serde_json::from_str(bloc).ok()?;
     let champ = |n: &str| m.get(n)?.as_str()?.parse::<f64>().ok().filter(|v| v.is_finite());
-    let (i, tp, lra, seuil, ecart) = (champ("input_i")?, champ("input_tp")?, champ("input_lra")?, champ("input_thresh")?, champ("target_offset")?);
+    Some([champ("input_i")?, champ("input_tp")?, champ("input_lra")?, champ("input_thresh")?, champ("target_offset")?])
+}
+
+/// Le gain mesuré, puis un limiteur pour les crêtes. Pas de second passage de `loudnorm` : sur la
+/// voix, ses crêtes le font basculer en mode dynamique et il rate la cible de 2 à 3 LU. Mesuré sur
+/// une prise OBS : −14,2 LUFS, crête −0,7 dB. `None` : pas de mesure, ou un silence.
+fn filtre_depuis_mesure(journal: &str, voix: &Voix) -> Option<String> {
+    let [i, ..] = lire_mesure(journal)?;
     if i < -60.0 {
         return None;
     }
-    Some(format!(
-        "loudnorm={VOLUME}:measured_I={i}:measured_TP={tp}:measured_LRA={lra}:measured_thresh={seuil}:offset={ecart}:linear=true,aresample=48000"
-    ))
+    // Marge de 0,5 dB : le limiteur voit les échantillons, pas les crêtes entre eux.
+    let limite = 10f64.powf((voix.crete_db - 0.5) / 20.0).clamp(0.0625, 1.0);
+    Some(format!("volume={:.2}dB,alimiter=limit={limite:.4}:attack=5:release=50:level=false", voix.niveau_lufs - i))
+}
+
+/// Un extrait pour l'écoute : son stéréo 48 kHz en s16le, et son niveau en LUFS.
+pub struct Extrait {
+    pub pcm: Vec<u8>,
+    pub lufs: Option<f64>,
+}
+
+fn ffmpeg_extrait(video: &Path, debut: f64, duree: f64, filtre: Option<&str>, sortie: &[&str]) -> Option<std::process::Output> {
+    let mut c = Command::new("ffmpeg");
+    c.args(["-hide_banner", "-nostats", "-ss", &format!("{debut:.3}"), "-t", &format!("{duree:.3}"), "-i"]).arg(video).arg("-vn");
+    if let Some(f) = filtre {
+        c.args(["-af", f]);
+    }
+    c.args(sortie).stdin(Stdio::null()).output().ok()
+}
+
+/// Le passage tel quel, puis nettoyé comme au rendu.
+pub fn avant_apres(video: &Path, debut: f64, duree: f64, voix: &Voix) -> Option<(Extrait, Extrait)> {
+    const PCM: [&str; 9] = ["-ac", "2", "-ar", "48000", "-f", "s16le", "-c:a", "pcm_s16le", "-"];
+    const NUL: [&str; 3] = ["-f", "null", "-"];
+    let mesure = |f: &str| ffmpeg_extrait(video, debut, duree, Some(f), &NUL).map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
+    let vers_cible = format!("loudnorm={}:print_format=json", voix.cible());
+    let brut = mesure(&vers_cible)?;
+    let nettoyage = voix.filtres();
+    let avant_niveau = nettoyage.as_ref().map(|f| format!("{f},")).unwrap_or_default();
+    let filtre = if voix.niveau {
+        let m = mesure(&format!("{avant_niveau}{vers_cible}"))?;
+        filtre_depuis_mesure(&m, voix).map(|n| format!("{avant_niveau}{n}")).or(nettoyage)
+    } else {
+        nettoyage
+    };
+    let lire = |f: Option<&str>| ffmpeg_extrait(video, debut, duree, f, &PCM).filter(|o| o.status.success()).map(|o| o.stdout);
+    let (pcm_avant, pcm_apres) = (lire(None)?, lire(filtre.as_deref())?);
+    // Mesurée sur ce qui sort vraiment, pas sur la cible.
+    let lufs = |f: Option<&str>| {
+        let texte = match f {
+            Some(f) => format!("{f},{}", vers_cible),
+            None => vers_cible.clone(),
+        };
+        mesure(&texte).and_then(|m| lire_mesure(&m)).map(|m| m[0])
+    };
+    Some((Extrait { pcm: pcm_avant, lufs: lire_mesure(&brut).map(|m| m[0]) }, Extrait { pcm: pcm_apres, lufs: lufs(filtre.as_deref()) }))
 }
 
 fn lancer(cmd: &[String], entree: bool) -> Result<Child, Erreur> {
@@ -232,7 +302,7 @@ impl Lecture {
         let mut dessus: Option<(String, f64, Child, ChildStdout)> = None;
         let mut n = 0u64;
         let mut lues = 0u64;
-        while !suivi.arret.load(Ordering::Relaxed) {
+        while !suivi.fin_de_lecture() {
             let Some(rgba) = lire_image(&mut flux, l * h * 4) else { break };
             let t = n as f64 / self.ips;
             n += 1;
@@ -278,7 +348,7 @@ impl Lecture {
             ordre += 1;
         }
         // Une intercalée posée à la toute fin.
-        while prochaine < intercalees.len() && !suivi.arret.load(Ordering::Relaxed) {
+        while prochaine < intercalees.len() && !suivi.fin_de_lecture() {
             self.intercaler(intercalees[prochaine], &envoi, &mut ordre, suivi)?;
             prochaine += 1;
         }
@@ -307,7 +377,7 @@ impl Lecture {
             derniere[k * 4 + 3] = 255;
         }
         for _ in 0..n {
-            if suivi.arret.load(Ordering::Relaxed) {
+            if suivi.fin_de_lecture() {
                 break;
             }
             if let Some(image) = lire_image(&mut f, taille) {
@@ -345,7 +415,7 @@ fn peindre(image: Image, c: &Compositeur, voix: &Compositeur, l: u32, h: u32, lo
 }
 
 /// Rend le montage dans `sortie` (écrit en `.partiel.mp4`, renommé une fois fini).
-pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> Result<(), Erreur> {
+pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, sortie: &Path, suivi: &Suivi) -> Result<(), Erreur> {
     let infos = sonder(video)?;
     let (num, den) = cadence(&infos.images_par_s);
     let ips_texte = format!("{num}/{den}");
@@ -371,8 +441,9 @@ pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> 
             return Err(Erreur(format!("Vidéo insérée introuvable : {}", i.video)));
         }
     }
-    let volume = if infos.son && montage.reglages.volume_egal { filtre_volume(video, &retire, &clips) } else { None };
-    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, infos.son, &clips, volume.as_deref()), true)?;
+    let son = infos.son && pre.son;
+    let volume = if son { filtre_son(video, &retire, &clips, voix) } else { None };
+    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, son, &clips, volume.as_deref(), pre), true)?;
     let mut entree = encodeur.stdin.take().expect("entrée de l'encodeur");
     let erreurs = encodeur.stderr.take();
     // Lue à part : ffmpeg bloquerait s'il remplissait sa sortie d'erreur.
@@ -384,7 +455,10 @@ pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> 
         t
     });
 
-    suivi.total.store((montage.duree_montee() * ips) as u32, Ordering::Relaxed);
+    let total = pre.duree_max.map_or(montage.duree_montee(), |d| d.min(montage.duree_montee()));
+    let limite = pre.duree_max.map(|d| (d * ips) as u64);
+    suivi.total.store((total * ips) as u32, Ordering::Relaxed);
+    suivi.assez.store(false, Ordering::Relaxed);
     suivi.faites.store(0, Ordering::Relaxed);
     let m = Arc::new(montage.clone());
     let polices = Polices::charger();
@@ -425,12 +499,14 @@ pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> 
             };
             attente.insert(n, image);
             while let Some(i) = attente.remove(&suivante) {
-                if resultat.is_ok() && entree.write_all(&i).is_err() {
+                if limite.is_some_and(|l| suivante >= l) {
+                    suivi.assez.store(true, Ordering::Relaxed);
+                } else if resultat.is_ok() && entree.write_all(&i).is_err() {
                     resultat = Err(Erreur("l'encodeur s'est arrêté".into()));
                     suivi.arret.store(true, Ordering::Relaxed);
                 }
                 suivante += 1;
-                suivi.faites.store(suivante as u32, Ordering::Relaxed);
+                suivi.faites.store(limite.map_or(suivante, |l| suivante.min(l)) as u32, Ordering::Relaxed);
             }
         }
         lecteur.join().unwrap_or_else(|_| Err(Erreur("la lecture s'est arrêtée".into())))
@@ -454,10 +530,13 @@ pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> 
 
 /// Toute la sortie d'une prise : `<vidéo> montage YouTube.mp4`, les sous-titres à part s'il y en a,
 /// puis, si la vignette est là, `<vidéo> avec vignette.mp4`. Rend un compte en français.
-pub fn monter(video: &Path, montage: &Montage, suivi: &Suivi) -> Result<String, Erreur> {
-    let rendu = noyau::chemin_derive(video, noyau::SUFFIXE_MONTAGE);
-    rendre(video, montage, &rendu, suivi)?;
+pub fn monter(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, suivi: &Suivi) -> Result<String, Erreur> {
+    let rendu = noyau::chemin_derive(video, pre.suffixe);
+    rendre(video, montage, voix, pre, &rendu, suivi)?;
     let mut compte = format!("Rendu : {} ({:.0} Mo)", nom(&rendu), taille_mo(&rendu));
+    if !pre.youtube {
+        return Ok(compte + ".");
+    }
     ecrire_srt(&noyau::chemin_derive(video, noyau::SUFFIXE_SRT_MONTAGE), montage, 0.0, &mut compte)?;
     let png = noyau::chemin_derive(video, noyau::SUFFIXE_PNG);
     if !png.exists() {
@@ -522,13 +601,36 @@ pub fn sonder(video: &Path) -> Result<Infos, Erreur> {
 mod tests_volume {
     use super::*;
 
+    /// Un son trop faible, un bout seulement : l'écoute sort au niveau visé, sans dépasser la crête.
+    #[test]
+    fn avant_apres_au_niveau() {
+        let d = std::env::temp_dir().join(format!("avant-apres-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let v = d.join("son.mp4");
+        let fait = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=12,volume=-20dB", "-c:a", "aac"])
+            .arg(&v)
+            .status()
+            .unwrap();
+        assert!(fait.success());
+        let (a, b) = avant_apres(&v, 1.0, 10.0, &Voix::default()).unwrap();
+        let attendu = 48000 * 2 * 2 * 10;
+        assert!(a.pcm.len().abs_diff(attendu) < 4096 && b.pcm.len().abs_diff(attendu) < 4096, "{} {}", a.pcm.len(), b.pcm.len());
+        let (la, lb) = (a.lufs.unwrap(), b.lufs.unwrap());
+        assert!(la < -30.0 && (lb + 14.0).abs() < 1.5, "{la} → {lb}");
+        let pic = b.pcm.chunks_exact(2).map(|o| i16::from_le_bytes([o[0], o[1]]).unsigned_abs()).max().unwrap() as f64 / 32768.0;
+        assert!(pic <= 10f64.powf(-1.0 / 20.0), "{pic}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     #[test]
     fn mesure_lue_ou_ecartee() {
         let bloc = |i: &str| format!("[Parsed_loudnorm_0 @ 0x1]\n{{\n\t\"input_i\" : \"{i}\",\n\t\"input_tp\" : \"-9.40\",\n\t\"input_lra\" : \"7.40\",\n\t\"input_thresh\" : \"-41.00\",\n\t\"target_offset\" : \"0.20\"\n}}\n");
-        let f = filtre_depuis_mesure(&bloc("-30.90")).unwrap();
-        assert!(f.contains("measured_I=-30.9:measured_TP=-9.4") && f.ends_with("aresample=48000"), "{f}");
-        assert_eq!(filtre_depuis_mesure(&bloc("-inf")), None);
-        assert_eq!(filtre_depuis_mesure(&bloc("-70.00")), None);
-        assert_eq!(filtre_depuis_mesure("rien"), None);
+        let v = Voix::default();
+        let f = filtre_depuis_mesure(&bloc("-30.90"), &v).unwrap();
+        assert_eq!(f, "volume=16.90dB,alimiter=limit=0.8414:attack=5:release=50:level=false");
+        assert_eq!(filtre_depuis_mesure(&bloc("-inf"), &v), None);
+        assert_eq!(filtre_depuis_mesure(&bloc("-70.00"), &v), None);
+        assert_eq!(filtre_depuis_mesure("rien", &v), None);
     }
 }

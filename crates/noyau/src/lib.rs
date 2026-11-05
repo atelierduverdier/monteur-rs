@@ -11,12 +11,14 @@ pub mod ecriture;
 pub mod fiches;
 pub mod journal;
 pub mod montage;
+pub mod prereglages;
 pub mod projet;
 pub mod projets;
 pub mod sous_titres;
 pub mod temps_morts;
 pub mod verrou;
 pub mod videos;
+pub mod voix;
 
 // Les fichiers posés à côté d'une vidéo (`noyau.SUFFIXE_*` du Monteur 1).
 pub const SUFFIXE_PNG: &str = " vignette YouTube.png";
@@ -29,9 +31,12 @@ pub const EXTENSION_PROJET: &str = ".monteur";
 pub const SUFFIXE_SRT_MONTAGE: &str = " montage YouTube.fr.srt";
 pub const SUFFIXE_SRT: &str = " avec vignette.fr.srt";
 /// Fichiers que le Monteur fabrique à partir d'une vidéo : ce ne sont pas des sources.
-pub const SUFFIXES_DERIVES: [&str; 2] = [" avec vignette", " montage YouTube"];
+pub const SUFFIXES_DERIVES: [&str; 4] = [" avec vignette", " montage YouTube", " court", " brouillon"];
 /// Ce qui accompagne une vidéo et part avec elle quand on la range.
-pub const SUFFIXES_LIES: [&str; 9] = [
+pub const SUFFIXE_COURT: &str = " court.mp4";
+pub const SUFFIXE_BROUILLON: &str = " brouillon.mp4";
+pub const SUFFIXE_GIF: &str = " extrait.gif";
+pub const SUFFIXES_LIES: [&str; 12] = [
     SUFFIXE_PNG,
     SUFFIXE_JPG,
     SUFFIXE_MONTEE,
@@ -41,6 +46,9 @@ pub const SUFFIXES_LIES: [&str; 9] = [
     EXTENSION_PROJET,
     SUFFIXE_SRT_MONTAGE,
     SUFFIXE_SRT,
+    SUFFIXE_COURT,
+    SUFFIXE_BROUILLON,
+    SUFFIXE_GIF,
 ];
 pub const EXTENSIONS: [&str; 3] = ["mp4", "mkv", "mov"];
 /// La vignette : 1280 × 720, l'image de la vidéo à droite sur 646 × 720 (charte du 23/10/2026).
