@@ -475,3 +475,30 @@ pub fn lire_pourcentage(ligne: &str) -> Option<f64> {
     }
     None
 }
+
+/// Le fichier `.ts` de gpu-screen-recorder : l'instant de la première image, en secondes.
+pub fn lire_premiere_image(texte: &str) -> Option<f64> {
+    let valeurs = texte.lines().nth(1)?;
+    Some(valeurs.split_whitespace().nth(1)?.parse::<f64>().ok()? / 1e6)
+}
+
+/// Le nom d'une prise à cet instant, à la façon d'OBS : `2026-11-05 07-47-00`.
+pub fn nom_de_prise(instant: f64) -> String {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_opt(instant as i64, 0).earliest().map_or_else(String::new, |d| d.format("%Y-%m-%d %H-%M-%S").to_string())
+}
+
+#[cfg(test)]
+mod tests_capture {
+    use super::*;
+
+    /// Le nom donné à une prise redonne son instant, à la seconde : les gestes se calent dessus.
+    #[test]
+    fn nom_de_prise_et_journal() {
+        let t = lire_premiere_image("monotonic_microsec\trealtime_microsec\n5552684605\t1793861451459387\n").unwrap();
+        assert!((t - 1793861451.459387).abs() < 1e-6);
+        let v = std::path::PathBuf::from(format!("{}.mp4", nom_de_prise(t)));
+        assert_eq!(crate::journal::debut_de_la_video(&v, 10.0), 1793861451.0);
+        assert_eq!(lire_premiere_image("monotonic_microsec\trealtime_microsec\n"), None);
+    }
+}

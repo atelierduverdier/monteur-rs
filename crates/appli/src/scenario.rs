@@ -4,7 +4,7 @@
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
 //! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
 //! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
-//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `arreter_ecran`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -166,6 +166,8 @@ impl Scenario {
                     return false;
                 }
                 "filmer" => m.filmer(),
+                "filmer_ecran" => m.filmer_ecran(),
+                "arreter_ecran" => m.capture.iter_mut().for_each(|c| c.arreter()),
                 "liste" => println!("  {} prise(s) dans la liste", m.dossier.prises.len()),
                 "nouveau" => m.nouveau_projet(&mots[1..].join(" ")),
                 "marquer" => m.prise.iter_mut().for_each(|p| {

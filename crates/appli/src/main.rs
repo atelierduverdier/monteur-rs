@@ -4,6 +4,7 @@
 //!
 //! `monteur2 [dossier]` : sans dossier, celui des fiches du Monteur 1, sinon « Copies d'écran ».
 
+mod capture;
 mod etat;
 mod ligne;
 mod miniatures;
@@ -187,6 +188,10 @@ struct Monteur {
     bande: miniatures::Bande,
     bande_neuve: bool,
     rendu: Option<RenduEnCours>,
+    /// L'écran en train d'être filmé.
+    capture: Option<capture::Capture>,
+    /// Filmer VerdierCAM : l'enregistrement attend que sa fenêtre soit ouverte.
+    capture_prevue: Option<std::time::Instant>,
     youtube: youtube::Youtube,
     /// Pour les essais : passer sur l'onglet YouTube.
     montrer_youtube: bool,
@@ -208,6 +213,17 @@ fn dossier_de_depart(fiches: &Fiches) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| fiches.dossier.clone())
         .unwrap_or_else(noyau::videos::dossier_defaut)
+}
+
+/// Le temps laissé à VerdierCAM pour ouvrir sa fenêtre : le dialogue ne liste que celles qui existent.
+const DELAI_VERDIERCAM: std::time::Duration = std::time::Duration::from_secs(4);
+
+fn chemin_jeton_portail() -> PathBuf {
+    chemin_fiches().with_file_name("portail-capture")
+}
+
+fn chrono_court(s: f64) -> String {
+    format!("{}:{:02}", s as u64 / 60, s as u64 % 60)
 }
 
 fn chemin_fiches() -> PathBuf {
@@ -258,6 +274,8 @@ impl Monteur {
             bande: miniatures::Bande::vide(),
             bande_neuve: false,
             rendu: None,
+            capture: None,
+            capture_prevue: None,
             youtube: youtube::Youtube::new(),
             montrer_youtube: false,
             envoi: None,
@@ -419,8 +437,44 @@ impl Monteur {
             .stderr(std::process::Stdio::null())
             .spawn();
         self.message = match lance {
-            Ok(_) => "VerdierCAM lancé, ses gestes sont notés. Lance l'enregistrement dans OBS.".into(),
+            Ok(_) => {
+                if self.capture.is_none() {
+                    self.capture_prevue = Some(std::time::Instant::now() + DELAI_VERDIERCAM);
+                }
+                "VerdierCAM lancé, ses gestes sont notés. L'enregistrement va demander sa fenêtre.".into()
+            }
             Err(e) => format!("VerdierCAM n'a pas pu être lancé : {e}"),
+        };
+    }
+
+    /// Lance l'enregistrement de l'écran, dans le dossier affiché.
+    fn filmer_ecran(&mut self) {
+        if self.capture.is_some() {
+            return;
+        }
+        match capture::Capture::lancer(&self.dossier.chemin, &chemin_jeton_portail()) {
+            Ok(c) => {
+                self.capture = Some(c);
+                self.message = "Choisis la fenêtre à filmer.".into();
+            }
+            Err(e) => self.message = e,
+        }
+    }
+
+    fn suivre_capture(&mut self) {
+        if self.capture_prevue.is_some_and(|t| std::time::Instant::now() >= t) {
+            self.capture_prevue = None;
+            self.filmer_ecran();
+        }
+        let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
+        let duree = self.capture.take().and_then(|c| c.temps()).unwrap_or(0.0);
+        self.message = match fin {
+            capture::Fin::Prise(p) => {
+                self.a_changer = Some(self.dossier.chemin.clone());
+                format!("Prise enregistrée : {} ({}).", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree))
+            }
+            capture::Fin::Annulee => "Enregistrement annulé.".into(),
+            capture::Fin::Erreur(e) => e,
         };
     }
 
@@ -665,11 +719,30 @@ impl Monteur {
             ui.tooltip_text("Écrit la vidéo montée à côté de la prise, puis la version avec vignette si la vignette existe.");
         }
         ui.same_line();
-        if ui.button_with_size("Filmer VerdierCAM…", [0.0, 30.0]) {
-            self.filmer();
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Lance VerdierCAM : ses gestes sont notés pour préparer le montage.");
+        if let Some(c) = &mut self.capture {
+            // Trois `let` : ImGui exige de les retirer à l'envers, ce que ferait mal un tableau.
+            let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ERREUR));
+            let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::vec(charte::ERREUR, 0.85));
+            let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::vec(charte::ERREUR, 0.7));
+            let texte = c.temps().map_or("Annuler le choix".to_string(), |t| format!("Arrêter {}", chrono_court(t)));
+            if ui.button_with_size(format!("{texte}###arret_capture"), [0.0, 30.0]) {
+                c.arreter();
+            }
+        } else {
+            if ui.button_with_size("Filmer…", [0.0, 30.0]) {
+                self.capture_prevue = None;
+                self.filmer_ecran();
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Filme une fenêtre, sans OBS. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer.");
+            }
+            ui.same_line();
+            if ui.button_with_size("Filmer VerdierCAM…", [0.0, 30.0]) {
+                self.filmer();
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.");
+            }
         }
         let Some(p) = &mut self.prise else { return };
         let t = p.lecteur.position();
@@ -1045,6 +1118,7 @@ impl Application for Monteur {
                 context.request_exit();
             }
         }
+        self.suivre_capture();
         // La liste suit le dossier toute seule : une prise d'OBS y apparaît en quelques secondes.
         if self.regarde.elapsed().as_secs() >= 2 {
             self.regarde = std::time::Instant::now();
@@ -1210,6 +1284,11 @@ impl Application for Monteur {
                     self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Vidéos (*.mp4 *.mkv *.mov)"));
                 }
                 ui.separator();
+                let jeton = chemin_jeton_portail();
+                if ui.menu_item_enabled_selected_no_shortcut("Filmer une autre fenêtre…", false, self.capture.is_none()) {
+                    let _ = std::fs::remove_file(&jeton);
+                    self.filmer_ecran();
+                }
                 if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
                     self.enregistrer();
                 }
