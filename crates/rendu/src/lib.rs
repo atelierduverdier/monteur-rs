@@ -80,6 +80,25 @@ pub fn commande_clip(chemin: &Path, debut: f64, duree: f64, l: u32, h: u32, ips:
 }
 
 /// L'expression ffmpeg vraie dans les passages à retirer.
+/// Le volume autour de chaque fondu : il descend avant la coupe et remonte après, le temps du fondu
+/// d'image. Posé avant le retrait des coupes : les temps sont ceux de la prise.
+fn enveloppe_son(fondus: &[(f64, f64, f64)]) -> String {
+    if fondus.is_empty() {
+        return String::new();
+    }
+    let termes: Vec<String> = fondus
+        .iter()
+        .flat_map(|&(a, b, d)| {
+            let h = d / 2.0;
+            [
+                format!("(1-between(t,{:.4},{a:.4})*(t-{:.4})/{h:.4})", a - h, a - h),
+                format!("(1-between(t,{b:.4},{:.4})*({:.4}-t)/{h:.4})", b + h, b + h),
+            ]
+        })
+        .collect();
+    format!("asetnsamples=n=256:p=0,volume='{}':eval=frame,", termes.join("*"))
+}
+
 pub fn expression_coupes(coupes: &[(f64, f64)]) -> Option<String> {
     (!coupes.is_empty()).then(|| coupes.iter().map(|(a, b)| format!("between(t,{a:.4},{b:.4})")).collect::<Vec<_>>().join("+"))
 }
@@ -93,18 +112,19 @@ pub struct ClipSon<'a> {
 
 /// Le graphe du son. Sans intercalée, celui du Monteur 1. Avec : la prise est découpée aux instants
 /// des intercalées, et leur son (ou un silence) se glisse entre les morceaux.
-fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon]) -> String {
+fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[(f64, f64, f64)]) -> String {
+    let enveloppe = enveloppe_son(fondus);
     let expr = expression_coupes(retire);
     let selection = expr.as_ref().map(|e| format!("aselect='not({e})',asetpts=N/SR/TB")).unwrap_or_else(|| s("asetpts=N/SR/TB"));
     if clips.is_empty() {
         let f = expr.map(|e| format!("aselect='not({e})',asetpts=N/SR/TB")).unwrap_or_else(|| s("anull"));
-        return format!("[1:a]{f}[a]");
+        return format!("[1:a]{enveloppe}{f}[a]");
     }
     const FORMAT: &str = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
     let n = clips.len() + 1;
     let mut g: Vec<String> = Vec::new();
     let sorties: String = (0..n).map(|i| format!("[p{i}]")).collect();
-    g.push(format!("[1:a]asplit={n}{sorties}"));
+    g.push(format!("[1:a]{enveloppe}asplit={n}{sorties}"));
     let mut concat = String::new();
     let mut debut = 0.0;
     let mut entree_clip = 2; // 0 : les images, 1 : la prise, puis les intercalées qui ont du son
@@ -132,7 +152,7 @@ fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], volume: Option<&str>, pre: &Prereglage) -> Vec<String> {
+pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], fondus: &[(f64, f64, f64)], volume: Option<&str>, pre: &Prereglage) -> Vec<String> {
     let mut cmd = vec![
         s("ffmpeg"), s("-v"), s("error"), s("-y"), s("-nostats"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgba"),
         s("-s"), format!("{l}x{h}"), s("-r"), s(ips), s("-i"), s("-"),
@@ -143,8 +163,8 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
             cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
         }
         let (graphe, sortie_son) = match volume {
-            Some(v) => (format!("{};[a]{v}[fort]", graphe_son(retire, clips)), "[fort]"),
-            None => (graphe_son(retire, clips), "[a]"),
+            Some(v) => (format!("{};[a]{v}[fort]", graphe_son(retire, clips, fondus)), "[fort]"),
+            None => (graphe_son(retire, clips, fondus), "[a]"),
         };
         cmd.extend([s("-filter_complex"), graphe, s("-map"), s("0:v"), s("-map"), s(sortie_son)]);
         cmd.extend([s("-c:a"), s("aac"), s("-b:a"), s("192k"), s("-shortest")]);
@@ -163,7 +183,7 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
 
 /// La chaîne de la voix pour tout le son monté : nettoyage, puis niveau mesuré (premier passage de
 /// `loudnorm`, repris au second). `None` : rien à appliquer.
-fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], voix: &Voix) -> Option<String> {
+fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[(f64, f64, f64)], voix: &Voix) -> Option<String> {
     let nettoyage = voix.filtres();
     if !voix.niveau {
         return nettoyage;
@@ -173,7 +193,7 @@ fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], voix: &Voi
         cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
     }
     let avant = nettoyage.as_ref().map(|f| format!("{f},")).unwrap_or_default();
-    let graphe = format!("{};[a]{avant}loudnorm={}:print_format=json[mesure]", graphe_son(retire, clips), voix.cible());
+    let graphe = format!("{};[a]{avant}loudnorm={}:print_format=json[mesure]", graphe_son(retire, clips, fondus), voix.cible());
     cmd.extend([s("-filter_complex"), graphe, s("-map"), s("[mesure]"), s("-f"), s("null"), s("-")]);
     let sortie = Command::new("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok();
     let niveau = sortie.and_then(|o| filtre_depuis_mesure(&String::from_utf8_lossy(&o.stderr), voix));
@@ -271,6 +291,22 @@ enum Image {
     Dessus { t: f64, rgba: Vec<u8> },
     /// Intercalée : elle sort telle quelle.
     Clip { rgba: Vec<u8> },
+    /// Un fondu : deux images de la prise, à peindre chacune à son instant, puis à mêler.
+    Fondu { avant: (f64, Vec<u8>), apres: (f64, Vec<u8>), poids: f32 },
+}
+
+/// Un fondu en images de la prise : `h` images de chaque côté du début et de la fin de la coupe.
+#[derive(Clone, Copy)]
+struct FonduImages {
+    debut: u64,
+    fin: u64,
+    h: u64,
+}
+
+impl FonduImages {
+    fn de(a: f64, b: f64, d: f64, ips: f64) -> Self {
+        Self { debut: (a * ips).ceil() as u64, fin: (b * ips).ceil() as u64, h: ((d * ips / 2.0).round() as u64).max(1) }
+    }
 }
 
 /// Ce que le fil de lecture emporte.
@@ -302,6 +338,10 @@ impl Lecture {
         let mut dessus: Option<(String, f64, Child, ChildStdout)> = None;
         let mut n = 0u64;
         let mut lues = 0u64;
+        // Les images qui finissent le passage d'avant attendent celles qui commencent le passage
+        // d'après : la prise se lit dans l'ordre. Au plus la durée d'un fondu : la mémoire reste bornée.
+        let fondus: Vec<FonduImages> = self.montage.fondus().iter().map(|&(a, b, d)| FonduImages::de(a, b, d, self.ips)).collect();
+        let mut sortantes: std::collections::VecDeque<(f64, Vec<u8>)> = std::collections::VecDeque::new();
         while !suivi.fin_de_lecture() {
             let Some(rgba) = lire_image(&mut flux, l * h * 4) else { break };
             let t = n as f64 / self.ips;
@@ -334,6 +374,22 @@ impl Lecture {
                         let _ = d.2.wait();
                     }
                 }
+            }
+            let rang = n - 1;
+            if fondus.iter().any(|f| rang + f.h >= f.debut && rang < f.debut + f.h) {
+                sortantes.push_back((t, rgba));
+                continue;
+            }
+            if let Some(f) = fondus.iter().find(|f| rang + f.h >= f.fin && rang < f.fin + f.h)
+                && let Some(avant) = sortantes.pop_front()
+            {
+                let k = rang + f.h - f.fin;
+                let poids = (k + 1) as f32 / (2 * f.h + 1) as f32;
+                if envoi.send((ordre, Image::Fondu { avant, apres: (t, rgba), poids })).is_err() {
+                    break;
+                }
+                ordre += 1;
+                continue;
             }
             if !image_gardee(&self.montage, t, self.ips) {
                 continue;
@@ -398,19 +454,28 @@ impl Lecture {
 /// Peint une image ; un fil par cœur en fait tourner une à la fois.
 fn peindre(image: Image, c: &Compositeur, voix: &Compositeur, l: u32, h: u32, lo: u32, ho: u32) -> Option<Vec<u8>> {
     let cible = R::new(0.0, 0.0, lo as f64, ho as f64);
+    let prise = |t: f64, rgba: Vec<u8>| {
+        let source = Pixmap::from_vec(rgba, IntSize::from_wh(l, h)?)?;
+        let mut p = Pixmap::new(lo, ho)?;
+        c.peindre(&mut p.as_mut(), Some(source.as_ref()), t, cible, false);
+        Some(p.take())
+    };
     match image {
         Image::Clip { rgba } => Some(rgba),
+        Image::Fondu { avant, apres, poids } => {
+            let (mut a, b) = (prise(avant.0, avant.1)?, prise(apres.0, apres.1)?);
+            let q = (poids * 256.0) as u32;
+            for (x, y) in a.iter_mut().zip(&b) {
+                *x = ((*x as u32 * (256 - q) + *y as u32 * q) >> 8) as u8;
+            }
+            Some(a)
+        }
         Image::Dessus { t, rgba } => {
             let mut p = Pixmap::from_vec(rgba, IntSize::from_wh(lo, ho)?)?;
             voix.peindre_calque(&mut p.as_mut(), t, cible, (0.0, 0.0, lo as f64, ho as f64), lo as f64, ho as f64);
             Some(p.take())
         }
-        Image::Prise { t, rgba } => {
-            let source = Pixmap::from_vec(rgba, IntSize::from_wh(l, h)?)?;
-            let mut p = Pixmap::new(lo, ho)?;
-            c.peindre(&mut p.as_mut(), Some(source.as_ref()), t, cible, false);
-            Some(p.take())
-        }
+        Image::Prise { t, rgba } => prise(t, rgba),
     }
 }
 
@@ -442,8 +507,9 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
         }
     }
     let son = infos.son && pre.son;
-    let volume = if son { filtre_son(video, &retire, &clips, voix) } else { None };
-    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, son, &clips, volume.as_deref(), pre), true)?;
+    let fondus = montage.fondus();
+    let volume = if son { filtre_son(video, &retire, &clips, &fondus, voix) } else { None };
+    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, son, &clips, &fondus, volume.as_deref(), pre), true)?;
     let mut entree = encodeur.stdin.take().expect("entrée de l'encodeur");
     let erreurs = encodeur.stderr.take();
     // Lue à part : ffmpeg bloquerait s'il remplissait sa sortie d'erreur.
@@ -600,6 +666,44 @@ pub fn sonder(video: &Path) -> Result<Infos, Erreur> {
 #[cfg(test)]
 mod tests_volume {
     use super::*;
+
+    /// Une coupe entre un plan rouge et un plan bleu : mêmes images au total, et les deux couleurs
+    /// mêlées au raccord.
+    #[test]
+    fn fondu_au_raccord() {
+        let d = std::env::temp_dir().join(format!("fondu-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (v, s) = (d.join("plans.mp4"), d.join("sortie.mp4"));
+        let fait = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=64x48:r=30:d=2.5", "-f", "lavfi", "-i", "color=blue:s=64x48:r=30:d=2.5"])
+            .args(["-f", "lavfi", "-i", "sine=f=440:r=48000:d=5"])
+            .args(["-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-crf", "1", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+            .arg(&v)
+            .status()
+            .unwrap();
+        assert!(fait.success());
+        let mut m = Montage { duree: 5.0, largeur: 64, hauteur: 48, ..Montage::default() };
+        m.coupes.push(noyau::montage::Coupe { debut: 2.0, fin: 3.0, active: true, origine: "main".into(), vitesse: 0.0, autres: Default::default() });
+        let suivi = Suivi::default();
+        rendre(&v, &m, &Voix::aucune(), &noyau::prereglages::PREREGLAGES[0], &s, &suivi).unwrap();
+        assert_eq!(suivi.faites.load(Ordering::Relaxed), 120);
+        let couleur = |t: f64| {
+            let o = Command::new("ffmpeg")
+                .args(["-v", "error", "-ss", &format!("{t}"), "-i"])
+                .arg(&s)
+                .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+                .output()
+                .unwrap();
+            (o.stdout[3000] as i32, o.stdout[3002] as i32)
+        };
+        let (r, b) = couleur(1.0);
+        assert!(r > 200 && b < 40, "avant : {r} {b}");
+        let (r, b) = couleur(3.0);
+        assert!(r < 40 && b > 200, "après : {r} {b}");
+        let (r, b) = couleur(2.0);
+        assert!((80..180).contains(&r) && (80..180).contains(&b), "au raccord : {r} {b}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     /// Un son trop faible, un bout seulement : l'écoute sort au niveau visé, sans dépasser la crête.
     #[test]

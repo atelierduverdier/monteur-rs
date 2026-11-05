@@ -201,8 +201,17 @@ pub struct Reglages {
     pub decalage_journal: f64,
     pub mettre_en_lumiere: bool,
     pub calage_auto: bool,
+    /// Durée du fondu à chaque coupe, en secondes ; 0 : coupes franches.
+    #[serde(skip_serializing_if = "fondu_par_defaut")]
+    pub fondu: f64,
     #[serde(flatten)]
     pub autres: Autres,
+}
+
+pub const FONDU_DEFAUT: f64 = 0.4;
+
+fn fondu_par_defaut(v: &f64) -> bool {
+    *v == FONDU_DEFAUT
 }
 
 impl Default for Reglages {
@@ -216,6 +225,7 @@ impl Default for Reglages {
             decalage_journal: 0.0,
             mettre_en_lumiere: true,
             calage_auto: true,
+            fondu: FONDU_DEFAUT,
             autres: Autres::new(),
         }
     }
@@ -393,6 +403,30 @@ impl Montage {
         fusion
     }
 
+    /// Les fondus (début de coupe, fin de coupe, durée). Un fondu mêle l'image d'avant la coupe, qui
+    /// continue, à celle d'après, déjà commencée : il prend sa matière dans ce qui est coupé et dans
+    /// ce qui reste, moitié de chaque côté, et la durée montée ne change pas. Il se raccourcit si la
+    /// coupe ou le passage voisin sont trop courts ; pas de fondu au bord de la prise, ni contre
+    /// une vidéo insérée ou un passage accéléré.
+    pub fn fondus(&self) -> Vec<(f64, f64, f64)> {
+        if self.reglages.fondu < 0.1 {
+            return Vec::new();
+        }
+        let coupes = self.coupes_actives();
+        let mut genes: Vec<(f64, f64)> = self.accelerations().iter().map(|&(a, b, _)| (a, b)).collect();
+        genes.extend(self.insertions.iter().map(|i| (i.t, if i.par_dessus() { i.t + i.duree() } else { i.t })));
+        let mut res = Vec::new();
+        for (i, &(a, b)) in coupes.iter().enumerate() {
+            let avant = if i == 0 { a * 2.0 } else { a - coupes[i - 1].1 };
+            let apres = coupes.get(i + 1).map_or((self.duree - b) * 2.0, |c| c.0 - b);
+            let d = self.reglages.fondu.min(b - a).min(avant).min(apres);
+            if d >= 0.1 && !genes.iter().any(|&(x, y)| x <= b + d / 2.0 && y >= a - d / 2.0) {
+                res.push((a, b, d));
+            }
+        }
+        res
+    }
+
     /// Les passages accélérés (début, fin, vitesse), hors des passages coupés et sans
     /// chevauchement entre eux : le premier posé gagne.
     pub fn accelerations(&self) -> Vec<(f64, f64, f64)> {
@@ -541,3 +575,35 @@ pub fn temps_monte(retire: &[(f64, f64)], t: f64) -> f64 {
     }
     res.max(0.0)
 }
+
+#[cfg(test)]
+mod tests_fondus {
+    use super::*;
+
+    fn avec(coupes: &[(f64, f64)], fondu: f64) -> Montage {
+        let mut m = Montage { duree: 60.0, ..Montage::default() };
+        m.reglages.fondu = fondu;
+        m.coupes = coupes.iter().map(|&(debut, fin)| Coupe { debut, fin, active: true, origine: "main".into(), vitesse: 0.0, autres: Default::default() }).collect();
+        m
+    }
+
+    #[test]
+    fn fondus_bornes() {
+        assert_eq!(avec(&[(10.0, 20.0)], 0.4).fondus(), vec![(10.0, 20.0, 0.4)]);
+        assert!(avec(&[(10.0, 20.0)], 0.0).fondus().is_empty());
+        // Une coupe courte raccourcit le fondu, trop courte elle le retire.
+        assert_eq!(avec(&[(10.0, 10.3)], 0.4).fondus()[0].2, 10.3 - 10.0);
+        assert!(avec(&[(10.0, 10.05)], 0.4).fondus().is_empty());
+        // Au bord de la prise : rien à mêler.
+        assert!(avec(&[(0.0, 5.0)], 0.4).fondus().is_empty());
+        assert!(avec(&[(50.0, 60.0)], 0.4).fondus().is_empty());
+        // Deux coupes voisines ne se marchent pas dessus.
+        let f = avec(&[(10.0, 12.0), (12.3, 15.0)], 0.4).fondus();
+        assert!(f.iter().all(|x| x.2 <= 0.3 + 1e-9) && f[0].1 + f[0].2 / 2.0 <= f[1].0 - f[1].2 / 2.0 + 1e-9, "{f:?}");
+        // Un passage accéléré contre la coupe.
+        let mut m = avec(&[(10.0, 20.0)], 0.4);
+        m.coupes.push(Coupe { debut: 20.0, fin: 25.0, active: true, origine: "main".into(), vitesse: 4.0, autres: Default::default() });
+        assert!(m.fondus().is_empty());
+    }
+}
+

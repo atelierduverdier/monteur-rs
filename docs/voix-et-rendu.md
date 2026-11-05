@@ -36,3 +36,14 @@ sont pas faits.
 
 Les fenêtres n'ont pas pu être regardées à l'essai : la capture prend la fenêtre active, et Xvfb
 n'a pas de présentation Vulkan.
+
+## Fondus aux coupes
+
+Réglage « Fondu aux coupes » de l'Inspecteur, 0,4 s d'office, 0 pour des coupes franches. À chaque
+coupe, l'image d'avant continue dans ce qui est coupé pendant que celle d'après commence avant son
+point de reprise : moitié de chaque côté du raccord, et la durée montée ne change pas. Le son baisse et
+remonte le temps du fondu, sans se chevaucher. Le fondu se raccourcit si la coupe ou le passage voisin
+sont courts ; il n'y en a pas au bord de la prise, ni contre une vidéo insérée ou un passage accéléré.
+
+Le rendu seul : la visionneuse saute encore les coupes net.
+

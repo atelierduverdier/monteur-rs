@@ -1419,6 +1419,15 @@ impl Monteur {
                 change |= ui.checkbox("Mettre le réglage en lumière", &mut r.mettre_en_lumiere);
                 change |= ui.checkbox("Montrer les sous-titres", &mut r.montrer_sous_titres);
                 change |= ui.checkbox("Incruster les sous-titres dans l'image", &mut r.incruster_sous_titres);
+                let mut fondu = r.fondu as f32;
+                ui.set_next_item_width(120.0);
+                if ui.slider_f32("Fondu aux coupes (s)", &mut fondu, 0.0, 1.0) {
+                    r.fondu = (fondu as f64 * 10.0).round() / 10.0;
+                    change = true;
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("Image et son se fondent à chaque coupe, au rendu. 0 : coupes franches.");
+                }
                 let mut cale = r.decalage_journal;
                 if nombre(ui, "Calage des gestes (s)", &mut cale, 0.05) {
                     r.decalage_journal = cale;
