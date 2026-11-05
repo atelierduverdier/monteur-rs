@@ -14,7 +14,7 @@ mod vignette;
 mod vue;
 mod youtube;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
@@ -197,6 +197,9 @@ struct Monteur {
     capture_prevue: Option<std::time::Instant>,
     /// Le raccourci global, demandé au premier enregistrement.
     raccourci: Option<Receiver<raccourci::Evenement>>,
+    /// La prise dont on demande la mise à la corbeille, en attente de confirmation.
+    a_jeter: Option<PathBuf>,
+    ouvrir_corbeille: bool,
     /// La prise tout juste filmée : Préparer se lance dès qu'elle est ouverte.
     a_preparer: Option<PathBuf>,
     /// Le panneau Texte : ce qu'on y cherche, et la phrase que la lecture y a amenée.
@@ -305,6 +308,8 @@ impl Monteur {
             capture: None,
             capture_prevue: None,
             raccourci: None,
+            a_jeter: None,
+            ouvrir_corbeille: false,
             a_preparer: None,
             cherche: String::new(),
             phrase_suivie: None,
@@ -749,9 +754,16 @@ impl Monteur {
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
         const HAUT: f32 = 58.0;
         let (mh, ml) = (46.0, 46.0 * miniatures::LARGEUR as f32 / miniatures::HAUTEUR as f32);
+        let mut demande = None;
         for (i, (chemin, etat)) in self.dossier.prises.iter().enumerate() {
             if ui.selectable_config(format!("##prise{i}")).selected(ouverte.as_ref() == Some(chemin)).size([0.0, HAUT]).build() {
                 self.a_ouvrir = Some(chemin.clone());
+            }
+            if ui.is_item_clicked_with_button(MouseButton::Right) {
+                demande = Some(chemin.clone());
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Clic droit : mettre à la corbeille");
             }
             let (a, b) = (ui.item_rect_min(), ui.item_rect_max());
             let dl = ui.get_window_draw_list();
@@ -780,6 +792,9 @@ impl Monteur {
         }
         if self.dossier.prises.is_empty() {
             ui.text_wrapped(format!("Aucune vidéo dans {}", self.dossier.chemin.display()));
+        }
+        if let Some(d) = demande {
+            self.demander_corbeille(d);
         }
     }
 
@@ -915,6 +930,74 @@ impl Monteur {
     }
 
     /// La boîte « Nouveau projet ».
+    fn demander_corbeille(&mut self, video: PathBuf) {
+        self.a_jeter = Some(video);
+        self.ouvrir_corbeille = true;
+    }
+
+    /// La confirmation : le nom de la prise, et tout ce qui part avec elle.
+    fn boite_corbeille(&mut self, ui: &Ui) {
+        const TITRE: &str = "Mettre à la corbeille";
+        if std::mem::take(&mut self.ouvrir_corbeille) {
+            ui.open_popup(TITRE);
+        }
+        let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() else { return };
+        let Some(video) = self.a_jeter.clone() else {
+            ui.close_current_popup();
+            boite.end();
+            return;
+        };
+        let fichiers = noyau::videos::fichiers_lies(&video);
+        let octets: u64 = fichiers.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+        ui.text(video.file_name().unwrap_or_default().to_string_lossy());
+        ui.text_colored(charte::c(charte::TEXT_2), format!("{} fichier(s), {:.0} Mo :", fichiers.len(), octets as f64 / 1e6));
+        for f in &fichiers {
+            ui.bullet_text(f.file_name().unwrap_or_default().to_string_lossy());
+        }
+        ui.spacing();
+        ui.text_wrapped("Tu pourras les récupérer depuis la corbeille.");
+        if !self.fiches.fiches.get(&noyau::videos::cle(&video)).map_or("", |f| f.youtube_id.as_str()).is_empty() {
+            ui.text_colored(charte::c(charte::ALERTE), "Cette vidéo a été envoyée : elle reste sur YouTube.");
+        }
+        ui.spacing();
+        if ui.button_with_size("Mettre à la corbeille", [180.0, 30.0]) {
+            self.a_jeter = None;
+            self.mettre_a_la_corbeille(&video);
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button_with_size("Annuler##corbeille", [100.0, 30.0]) {
+            self.a_jeter = None;
+            ui.close_current_popup();
+        }
+        boite.end();
+    }
+
+    /// Jamais de suppression définitive : `gio trash`, récupérable dans la corbeille de KDE.
+    fn mettre_a_la_corbeille(&mut self, video: &Path) {
+        if self.rendu.is_some() || self.envoi.is_some() {
+            self.message = "Un rendu ou un envoi est en cours : attends sa fin.".into();
+            return;
+        }
+        if self.prise.as_ref().is_some_and(|p| p.video == video) {
+            if let Some(e) = self.prise.as_mut().and_then(|p| p.ecrire_si_besoin(true)) {
+                self.message = e;
+                return;
+            }
+            // Le verrou et le fichier ouvert partent avec la prise.
+            self.prise = None;
+            self.vue.oublier_source();
+        }
+        let fichiers = noyau::videos::fichiers_lies(video);
+        let sortie = std::process::Command::new("gio").arg("trash").arg("--").args(&fichiers).stdin(std::process::Stdio::null()).output();
+        self.a_changer = Some(self.dossier.chemin.clone());
+        self.message = match sortie {
+            Ok(s) if s.status.success() => format!("{} fichier(s) à la corbeille : {}.", fichiers.len(), video.file_name().unwrap_or_default().to_string_lossy()),
+            Ok(s) => format!("Corbeille impossible : {}", String::from_utf8_lossy(&s.stderr).trim()),
+            Err(e) => format!("Corbeille impossible : {e}"),
+        };
+    }
+
     fn boite_projet(&mut self, ui: &Ui) {
         if std::mem::take(&mut self.ouvrir_boite) {
             ui.open_popup("Nouveau projet");
@@ -1402,6 +1485,11 @@ impl Application for Monteur {
                     let _ = std::fs::remove_file(&jeton);
                     self.filmer_ecran();
                 }
+                if ui.menu_item_enabled_selected_no_shortcut("Mettre la prise à la corbeille…", false, self.prise.is_some())
+                    && let Some(p) = &self.prise
+                {
+                    self.demander_corbeille(p.video.clone());
+                }
                 if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
                     self.enregistrer();
                 }
@@ -1534,6 +1622,7 @@ impl Application for Monteur {
             self.a_changer = Some(self.dossier.chemin.clone());
         }
         self.boite_projet(ui);
+        self.boite_corbeille(ui);
 
         // La barre d'état.
         ui.window("etat")

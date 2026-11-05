@@ -49,3 +49,10 @@ sinon les gestes seraient décalés.
 au premier enregistrement. Le portail refuse une appli sans identité : `outils/installer.sh` pose le
 `.desktop` `fr.atelierduverdier.Monteur2`, qui donne aussi le lanceur du menu. Identité acceptée le
 05/11 ; l'appui lui-même reste à essayer.
+
+## Effacer une prise
+
+Clic droit dans la liste, ou Fichier › Mettre la prise à la corbeille : une confirmation donne tous
+les fichiers qui partent avec elle (`fichiers_lies`), puis `gio trash`. Jamais de suppression
+définitive. Refusé pendant un rendu ou un envoi. `gio trash` refuse `/tmp` : essai sur `/home`.
+

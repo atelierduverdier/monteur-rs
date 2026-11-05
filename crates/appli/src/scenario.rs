@@ -4,7 +4,7 @@
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
 //! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
 //! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
-//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `arreter_ecran`, `niveau`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `arreter_ecran`, `niveau`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -138,6 +138,17 @@ impl Scenario {
                     if let Some(p) = &m.prise {
                         crate::youtube::inserer_chapitres(&mut m.youtube.description, &p.video, &p.montage);
                         println!("  {}", m.youtube.description.texte.replace('\n', " | "));
+                    }
+                }
+                "demander_corbeille" => {
+                    if let Some((p, _)) = m.dossier.prises.get(nombre(1) as usize) {
+                        let p = p.clone();
+                        m.demander_corbeille(p);
+                    }
+                }
+                "confirmer_corbeille" => {
+                    if let Some(v) = m.a_jeter.take() {
+                        m.mettre_a_la_corbeille(&v);
                     }
                 }
                 "onglet_texte" => m.montrer_texte = true,
