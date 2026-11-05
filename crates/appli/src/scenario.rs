@@ -2,7 +2,8 @@
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
-//! `nouveau <nom>`, `enregistrer`, `proposer`, `envoyer` (faux programme seulement),
+//! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
+//! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
 //! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
@@ -115,6 +116,29 @@ impl Scenario {
                         return false;
                     }
                     eprintln!("scénario : envoi refusé sans MONTEUR_YOUTUBE_ENVOI");
+                }
+                "chapitre" => m.prise.iter_mut().for_each(|p| {
+                    p.poser_chapitre(nombre(1));
+                }),
+                "proposer_chapitres" => {
+                    let gestes = crate::chemin_fiches().with_file_name("gestes");
+                    if let Some(p) = &mut m.prise {
+                        let d = [p.dossier().to_path_buf(), gestes];
+                        println!("  {}", p.proposer_chapitres(&d));
+                    }
+                }
+                "scinder" => m.prise.iter_mut().for_each(|p| println!("  {}", p.scinder(nombre(1)))),
+                "accelerer" => m.prise.iter_mut().for_each(|p| {
+                    p.retenir();
+                    p.montage.coupes.push(noyau::montage::Coupe { debut: nombre(1), fin: nombre(2), active: true, origine: "main".into(), vitesse: 4.0, autres: Default::default() });
+                    p.montage.trier();
+                    p.modifie();
+                }),
+                "inserer_chapitres" => {
+                    if let Some(p) = &m.prise {
+                        crate::youtube::inserer_chapitres(&mut m.youtube.description, &p.video, &p.montage);
+                        println!("  {}", m.youtube.description.texte.replace('\n', " | "));
+                    }
                 }
                 "onglet_youtube" => m.montrer_youtube = true,
                 "proposer" => {

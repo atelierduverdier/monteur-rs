@@ -80,3 +80,15 @@ jetable avec `XDG_DATA_HOME` jetable : le montage s'écrit à côté de la vidé
 Passage accéléré lu accéléré (il se lit pour l'instant à vitesse normale, le badge ×4 s'y voit),
 sous-titres de whisper dans « Préparer », choisir un autre dossier, vignettes d'image sur la piste
 Image, S (scinder) et M (marqueur : les chapitres arrivent avec le lot A).
+
+## Fin de l'étape 3 (05/11/2026)
+
+**Accéléré lu accéléré** : la tête passe `v` fois plus vite dans un passage accéléré ; le son reste à
+sa vitesse et se recale à la sortie, comme au rendu, qui ne garde que le début du son du passage.
+Mesuré à ×4 sur 140–170 s, lancé à 139 s : 147,9 s après 3 s, 160,0 s après 6 s, 170,5 s après 9 s.
+
+**S** coupe en deux, à la tête de lecture, l'élément choisi : zoom, étiquette, coupe, vidéo
+par-dessus, sous-titre (ses mots se partagent selon l'instant). Ni un clic ni une intercalée.
+
+**M** pose un chapitre ; piste Chapitres (un trait et son titre) ; Montage › Proposer les chapitres
+en met un par atelier visité d'après le journal de gestes, sans toucher à ceux posés à la main.

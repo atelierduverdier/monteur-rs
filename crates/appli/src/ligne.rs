@@ -38,7 +38,8 @@ struct Piste {
     hauteur: f32,
 }
 
-const PISTES: [Piste; 7] = [
+const PISTES: [Piste; 8] = [
+    Piste { nom: "Chapitres", sorte: Some(Sorte::Chapitre), couleur: charte::MARQUEUR, hauteur: 22.0 },
     Piste { nom: "Vidéos", sorte: Some(Sorte::Insertion), couleur: charte::PISTE_VIDEO, hauteur: 46.0 },
     Piste { nom: "Zooms", sorte: Some(Sorte::Zoom), couleur: charte::PISTE_ZOOM, hauteur: 26.0 },
     Piste { nom: "Étiquettes", sorte: Some(Sorte::Etiquette), couleur: charte::PISTE_ETIQUETTE, hauteur: 26.0 },
@@ -59,6 +60,7 @@ pub fn intervalle(m: &Montage, c: Choix) -> Option<(f64, f64)> {
         Sorte::Coupe => m.coupes.get(i).map(|e| (e.debut, e.fin)),
         // Intercalée, elle ne prend pas de temps sur la prise : une marque à son instant.
         Sorte::Insertion => m.insertions.get(i).map(|e| (e.t, e.t + if e.par_dessus() { e.duree() } else { 0.1 })),
+        Sorte::Chapitre => m.chapitres.get(i).map(|e| (e.t, e.t + 0.1)),
     }
 }
 
@@ -69,6 +71,7 @@ fn regler(m: &mut Montage, c: Choix, a: f64, b: f64) {
         Sorte::Zoom => m.zooms.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Etiquette => m.etiquettes.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Clic => m.clics.get_mut(i).map(|e| e.t = a),
+        Sorte::Chapitre => m.chapitres.get_mut(i).map(|e| e.t = a),
         Sorte::SousTitre => m.sous_titres.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Coupe => m.coupes.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Insertion => m.insertions.get_mut(i).map(|e| {
@@ -88,6 +91,7 @@ fn nombre(m: &Montage, s: Sorte) -> usize {
         Sorte::SousTitre => m.sous_titres.len(),
         Sorte::Coupe => m.coupes.len(),
         Sorte::Insertion => m.insertions.len(),
+        Sorte::Chapitre => m.chapitres.len(),
     }
 }
 
@@ -97,6 +101,7 @@ fn libelle(m: &Montage, c: Choix) -> String {
         Sorte::Zoom => m.zooms.get(i).map(|z| format!("×{:.1}", z.facteur).replace('.', ",")),
         Sorte::Etiquette => m.etiquettes.get(i).map(|e| e.texte.clone()),
         Sorte::Clic => None,
+        Sorte::Chapitre => m.chapitres.get(i).map(|c| c.titre.clone()),
         Sorte::Insertion => m.insertions.get(i).map(|e| {
             let nom = e.video.rsplit('/').next().unwrap_or(&e.video);
             format!("{nom} ({})", temps(e.duree()))
@@ -137,6 +142,7 @@ fn creer(m: &mut Montage, sorte: Sorte, a: f64, b: f64) -> Choix {
         Sorte::Coupe => m.coupes.push(Coupe { debut: a, fin: b, active: true, origine: "main".into(), vitesse: 0.0, autres: autres() }),
         // Une vidéo insérée ne se crée pas à la souris : il faut choisir son fichier.
         Sorte::Insertion => {}
+        Sorte::Chapitre => m.chapitres.push(noyau::montage::Chapitre { t: a, titre: "Chapitre".into(), origine: "main".into(), autres: autres() }),
     }
     let indice = nombre(m, sorte) - 1;
     Choix { sorte, indice }
@@ -324,9 +330,13 @@ impl Ligne {
                 let (xa, mut xb) = (self.x_de(a, x0), self.x_de(b, x0));
                 // Intercalée, elle n'occupe pas de temps sur la prise : une marque assez large pour
                 // la saisir.
-                let ponctuel = sorte == Sorte::Clic || (sorte == Sorte::Insertion && !prise.montage.insertions[indice].par_dessus());
+                let ponctuel = matches!(sorte, Sorte::Clic | Sorte::Chapitre) || (sorte == Sorte::Insertion && !prise.montage.insertions[indice].par_dessus());
                 if sorte == Sorte::Clic {
                     xb = xa + 3.0;
+                } else if sorte == Sorte::Chapitre {
+                    // Un instant : un trait et son titre, qui s'arrête au chapitre suivant.
+                    let suivant = prise.montage.chapitres.get(indice + 1).map_or(f32::MAX, |s| self.x_de(s.t, x0) - 4.0);
+                    xb = (xa + 200.0).min(suivant).max(xa + 3.0);
                 } else if ponctuel {
                     xb = xa + 90.0;
                 }
@@ -339,13 +349,18 @@ impl Ligne {
                 let couleur = if sorte == Sorte::Coupe && prise.montage.coupes[indice].vitesse > 1.0 { charte::ALERTE } else { piste.couleur };
                 let fond: f32 = if choisi { 0.85 } else if proposee { 0.08 } else { 0.25 };
                 let fond = if sorte == Sorte::Insertion { fond.max(0.75) } else { fond };
-                dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], charte::vec(couleur, fond)).filled(true).rounding(3.0).build();
-                dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], c(couleur)).rounding(3.0).thickness(if choisi { 2.0 } else { 1.0 }).build();
+                let chapitre = sorte == Sorte::Chapitre;
+                if chapitre {
+                    dl.add_rect([xa, yp + 2.0], [xa + if choisi { 4.0 } else { 2.0 }, yp + hp - 2.0], c(couleur)).filled(true).build();
+                } else {
+                    dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], charte::vec(couleur, fond)).filled(true).rounding(3.0).build();
+                    dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], c(couleur)).rounding(3.0).thickness(if choisi { 2.0 } else { 1.0 }).build();
+                }
                 let texte = libelle(&prise.montage, ch);
                 if !texte.is_empty() && xb - xa > 24.0 {
                     let visible: String = texte.chars().take(((xb - xa - 8.0) / 7.0) as usize).collect();
-                    let encre = if choisi || sorte == Sorte::Insertion { charte::ENCRE_SUR_ACCENT } else { charte::TEXT };
-                    dl.add_text([xa + 4.0, yp + hp / 2.0 - 8.0], c(encre), visible);
+                    let encre = if chapitre { couleur } else if choisi || sorte == Sorte::Insertion { charte::ENCRE_SUR_ACCENT } else { charte::TEXT };
+                    dl.add_text([xa + if chapitre { 7.0 } else { 4.0 }, yp + hp / 2.0 - 8.0], c(encre), visible);
                 }
                 if souris[1] >= yp && souris[1] < yp + hp && souris[0] >= xa - BORD && souris[0] <= xb + BORD {
                     let gauche = !ponctuel && (souris[0] - xa).abs() <= BORD;
@@ -393,7 +408,7 @@ impl Ligne {
                 Some(if g || d { Main::Bord { choix: ch, gauche: g } } else { Main::Deplacer { choix: ch, depart_t: t_souris, a0, b0 } })
             } else {
                 prise.choix = None;
-                piste_souris.filter(|s| *s != Sorte::Insertion).map(|sorte| Main::Creer { sorte, t0: t_souris }).or(Some(Main::Tete))
+                piste_souris.filter(|s| !matches!(s, Sorte::Insertion | Sorte::Chapitre)).map(|sorte| Main::Creer { sorte, t0: t_souris }).or(Some(Main::Tete))
             };
         }
         if survol && ui.is_mouse_double_clicked(MouseButton::Left) && sous_souris.is_none()

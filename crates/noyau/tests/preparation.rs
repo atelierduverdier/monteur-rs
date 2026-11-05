@@ -161,3 +161,59 @@ fn srt_apres_une_intercalee() {
     m.insertions[0].mode = "dessus".into();
     assert!(sous_titres::texte_srt(&m, 0.0).contains("00:00:20,000 --> 00:00:22,000"));
 }
+
+#[test]
+fn couper_un_texte() {
+    let (a, b) = sous_titres::couper_texte("un deux trois quatre", 0.5).unwrap();
+    assert_eq!((a.as_str(), b.as_str()), ("un deux", "trois quatre"));
+    let (a, b) = sous_titres::couper_texte("un deux", 0.01).unwrap();
+    assert_eq!((a.as_str(), b.as_str()), ("un", "deux"), "jamais de moitié vide");
+    assert!(sous_titres::couper_texte("seul", 0.5).is_none());
+}
+
+fn chapitre(t: f64, titre: &str) -> noyau::montage::Chapitre {
+    noyau::montage::Chapitre { t, titre: titre.into(), origine: "main".into(), autres: Default::default() }
+}
+
+#[test]
+fn chapitres_aux_temps_de_la_video_montee() {
+    let mut m = Montage { duree: 400.0, ..Default::default() };
+    m.chapitres = vec![chapitre(5.0, "Ouvrir"), chapitre(60.0, "Fraises"), chapitre(200.0, "Pièce finie")];
+    // 10 s coupées avant le deuxième, une vidéo de 20 s intercalée avant le troisième.
+    m.coupes.push(noyau::montage::Coupe { debut: 20.0, fin: 30.0, active: true, origine: "main".into(), vitesse: 0.0, autres: Default::default() });
+    m.insertions.push(noyau::montage::Insertion { t: 100.0, video: "x.mp4".into(), debut: 0.0, fin: 20.0, mode: "intercalee".into(), autres: Default::default() });
+    // Le premier à 0:00 ; 3 s de vignette en tête.
+    assert_eq!(sous_titres::texte_chapitres(&m, 3.0), "0:00 Ouvrir\n0:53 Fraises\n3:33 Pièce finie");
+    assert!(sous_titres::problemes_chapitres(&m).is_empty());
+    m.chapitres.pop();
+    assert_eq!(sous_titres::problemes_chapitres(&m).len(), 1, "moins de trois");
+    m.chapitres.push(chapitre(65.0, "Trop près"));
+    assert!(sous_titres::problemes_chapitres(&m).iter().any(|p| p.contains("10 s")));
+    assert_eq!(sous_titres::temps_youtube(3725.9), "1:02:05");
+    // Relus, réécrits ; un montage sans chapitre s'écrit comme avant.
+    assert_eq!(Montage::depuis_valeur(m.en_valeur()).unwrap().chapitres, m.chapitres);
+    assert!(Montage::default().en_valeur().get("chapitres").is_none());
+}
+
+#[test]
+fn chapitres_remplaces_dans_la_description() {
+    let d = "Une belle vidéo.\n\n0:00 Ancien\n1:02 Vieux\n\nVerdierCAM : https://verdiercam.fr";
+    let n = sous_titres::inserer_chapitres(d, "0:00 A\n1:00 B");
+    assert_eq!(n, "Une belle vidéo.\n\n\nVerdierCAM : https://verdiercam.fr\n\n0:00 A\n1:00 B");
+    assert!(n.contains("https://"), "une adresse n'est pas un chapitre");
+    assert_eq!(sous_titres::inserer_chapitres("", "0:00 A"), "0:00 A");
+}
+
+/// Sur la vraie prise du 04/11 : un chapitre par atelier, le premier au début.
+#[test]
+fn chapitres_proposes_d_apres_les_ateliers() {
+    let r = reference();
+    let p = &r["preparations"]["2026-11-04 07-59-21"];
+    let m = Montage::depuis_valeur(p["montage"].clone()).unwrap();
+    let j = Journal::lire(&donnees().join(p["journal"].as_str().unwrap())).unwrap();
+    let c = analyse::chapitres_des_ateliers(&j, &m, &donnees().join("2026-11-04 07-59-21.mp4"));
+    assert!(c.len() >= 3, "{} chapitres", c.len());
+    assert_eq!(c[0].t, 0.0);
+    assert!(c.windows(2).all(|w| w[0].titre != w[1].titre && w[0].t < w[1].t));
+    println!("{:?}", c.iter().map(|x| (x.t, x.titre.as_str())).collect::<Vec<_>>());
+}

@@ -142,6 +142,18 @@ pub struct Coupe {
     pub autres: Autres,
 }
 
+/// Un chapitre : un instant de la prise et son titre. Le Monteur 1 ne le connaît pas : un montage
+/// réenregistré par lui le perd.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Chapitre {
+    pub t: f64,
+    pub titre: String,
+    #[serde(default = "main")]
+    pub origine: String,
+    #[serde(flatten)]
+    pub autres: Autres,
+}
+
 /// Une autre vidéo dans le montage (celle de l'usinage à l'atelier). Le Monteur 1 ne la connaît pas :
 /// il ne la montre pas, et un montage réenregistré par lui la perd.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -225,6 +237,8 @@ pub struct Montage {
     pub coupes: Vec<Coupe>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub insertions: Vec<Insertion>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub chapitres: Vec<Chapitre>,
     pub reglages: Reglages,
     #[serde(flatten)]
     pub autres: Autres,
@@ -245,6 +259,7 @@ impl Default for Montage {
             sous_titres: Vec::new(),
             coupes: Vec::new(),
             insertions: Vec::new(),
+            chapitres: Vec::new(),
             reglages: Reglages::default(),
             autres: Autres::new(),
         }
@@ -307,6 +322,7 @@ impl Montage {
             sous_titres: elements(&mut d, "sous_titres"),
             coupes: elements(&mut d, "coupes"),
             insertions: elements(&mut d, "insertions"),
+            chapitres: elements(&mut d, "chapitres"),
             reglages: match d.remove("reglages") {
                 Some(r @ Value::Object(_)) => serde_json::from_value(r).unwrap_or_default(),
                 _ => Reglages::default(),
@@ -350,6 +366,7 @@ impl Montage {
         self.sous_titres.sort_by(|a, b| ordre(a.debut, b.debut));
         self.coupes.sort_by(|a, b| ordre(a.debut, b.debut));
         self.insertions.sort_by(|a, b| ordre(a.t, b.t));
+        self.chapitres.sort_by(|a, b| ordre(a.t, b.t));
     }
 
     fn borne(&self, fin: f64) -> f64 {

@@ -18,6 +18,10 @@ pub struct Lecteur {
     en_lecture: bool,
     /// D'où la lecture est partie : Stop y revient.
     parti_de: f64,
+    /// Un passage accéléré : d'où, et combien de fois plus vite. L'image va `v` fois plus vite
+    /// que l'horloge ; le son, lui, continue à sa vitesse, comme au rendu, qui ne garde que le
+    /// début du son du passage.
+    passage: Option<(f64, f64)>,
     pub duree: f64,
 }
 
@@ -27,7 +31,7 @@ impl Lecteur {
         taire_les_avertissements();
         let video = video::Video::ouvrir(chemin)?;
         let son = if avec_son { son::Son::ouvrir(chemin)? } else { None };
-        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, parti_de: 0.0, duree })
+        Ok(Self { video, son, depart: None, arret: 0.0, en_lecture: false, parti_de: 0.0, passage: None, duree })
     }
 
     pub fn en_lecture(&self) -> bool {
@@ -36,6 +40,23 @@ impl Lecteur {
 
     /// La seconde de la prise qu'on voit et qu'on entend.
     pub fn position(&self) -> f64 {
+        let h = self.horloge();
+        let t = self.passage.map_or(h, |(depart, v)| depart + (h - depart) * v);
+        t.min(self.duree.max(0.0))
+    }
+
+    /// L'image passe `v` fois plus vite à partir d'ici, jusqu'au prochain saut.
+    pub fn commencer_passage(&mut self, v: f64) {
+        if self.en_lecture && v > 1.0 {
+            self.passage = Some((self.horloge(), v));
+        }
+    }
+
+    pub fn en_passage(&self) -> bool {
+        self.passage.is_some()
+    }
+
+    fn horloge(&self) -> f64 {
         let t = if !self.en_lecture {
             self.arret
         } else if let Some(s) = &self.son {
@@ -67,6 +88,7 @@ impl Lecteur {
         }
         self.arret = self.position();
         self.en_lecture = false;
+        self.passage = None;
         if let Some(s) = &mut self.son {
             s.arreter();
             s.aller_a(self.arret);
@@ -87,6 +109,7 @@ impl Lecteur {
     /// Saute à `t`, en lecture ou à l'arrêt.
     pub fn aller_a(&mut self, t: f64) {
         let t = t.clamp(0.0, self.duree.max(0.0));
+        self.passage = None;
         self.arret = t;
         self.depart = Some((Instant::now(), t));
         self.video.aller_a(t);

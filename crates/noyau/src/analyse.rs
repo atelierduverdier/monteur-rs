@@ -581,6 +581,22 @@ pub fn caler_etiquettes_sur_la_voix(montage: &mut Montage) {
     }
 }
 
+/// Les chapitres qu'on peut proposer : un par atelier visité, dans l'ordre (le même atelier revenu
+/// aussitôt n'en fait pas deux), le premier au début de la prise.
+pub fn chapitres_des_ateliers(journal: &Journal, montage: &Montage, video: &Path) -> Vec<crate::montage::Chapitre> {
+    let decalage = journal.decalage(video, montage.duree) + montage.reglages.decalage_journal;
+    let g = lire_gestes(journal, decalage, montage.largeur as f64, montage.hauteur as f64);
+    let mut res: Vec<crate::montage::Chapitre> = Vec::new();
+    for (t, nom) in g.ateliers.iter().filter(|(t, _)| *t <= montage.duree) {
+        if res.last().is_some_and(|c| c.titre == *nom) {
+            continue;
+        }
+        let t = if res.is_empty() { 0.0 } else { arrondi(*t, 3) };
+        res.push(crate::montage::Chapitre { t, titre: nom.clone(), origine: "journal".into(), autres: Default::default() });
+    }
+    res
+}
+
 /// Les instants (s de la vidéo) où l'on fait quelque chose à l'écran ; `gestes_seuls` : les
 /// clics, touches et saisies, sans les mouvements de souris.
 pub fn instants_actifs(journal: &Journal, decalage: f64, gestes_seuls: bool) -> Vec<f64> {

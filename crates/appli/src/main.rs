@@ -533,6 +533,13 @@ impl Monteur {
         if ui.is_key_pressed(Key::K) {
             p.lecteur.arreter();
         }
+        if ui.is_key_pressed(Key::S) && !ctrl {
+            self.message = p.scinder(t);
+        }
+        if ui.is_key_pressed(Key::M) && !ctrl {
+            p.poser_chapitre(t);
+            self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();
+        }
         if ui.is_key_pressed(Key::Z) && !ctrl {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
@@ -683,6 +690,13 @@ impl Monteur {
             self.message = p.marquer_coupe(t);
         }
         ui.same_line();
+        if ui.button_with_size("Scinder (S)", [0.0, 30.0]) {
+            self.message = p.scinder(t);
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Coupe en deux l'élément choisi, à la tête de lecture.");
+        }
+        ui.same_line();
         if ui.button_with_size("Couper avant", [0.0, 30.0]) {
             p.ajouter_coupe(0.0, t);
         }
@@ -696,6 +710,11 @@ impl Monteur {
         if ui.button_with_size("Nouveau zoom (Z)", [0.0, 30.0]) {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
+        }
+        ui.same_line();
+        if ui.button_with_size("Chapitre (M)", [0.0, 30.0]) {
+            p.poser_chapitre(t);
+            self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();
         }
         ui.same_line();
         ui.dummy([12.0, 1.0]);
@@ -950,6 +969,13 @@ impl Monteur {
                 change |= nombre(ui, "Fin gardée (s)", &mut i.fin, 0.1);
                 ui.text_colored(charte::c(charte::UNIT), format!("durée {}", temps(i.duree())));
             }
+            Some(Choix { sorte: Sorte::Chapitre, indice }) if indice < p.montage.chapitres.len() => {
+                titre(ui, "Chapitre");
+                let c = &mut p.montage.chapitres[indice];
+                change |= ui.input_text("Titre", &mut c.titre).build();
+                change |= nombre(ui, "Instant (s)", &mut c.t, 0.1);
+                ui.text_wrapped("Le premier chapitre sera à 0:00 sur YouTube. Il en faut 3 au moins, à 10 s l'un de l'autre.");
+            }
             Some(Choix { sorte: Sorte::Clic, indice }) if indice < p.montage.clics.len() => {
                 titre(ui, "Clic");
                 let c = &mut p.montage.clics[indice];
@@ -1108,11 +1134,18 @@ impl Application for Monteur {
             if let Some(m) = p.suivre_les_insertions() {
                 self.message = m;
             }
-            // En lecture, les passages coupés se sautent, comme au rendu.
+            // En lecture, les passages coupés se sautent et les accélérés passent accélérés, comme
+            // au rendu : l'image va plus vite, le son reste à sa vitesse.
             if p.lecteur.en_lecture() {
                 let t = p.lecteur.position();
                 if let Some((_, b)) = p.montage.coupes_actives().into_iter().find(|&(a, b)| a <= t && t < b - 0.05) {
                     p.lecteur.aller_a(b);
+                } else {
+                    match p.montage.vitesse_a(t) {
+                        v if v > 1.0 && !p.lecteur.en_passage() => p.lecteur.commencer_passage(v),
+                        v if v <= 1.0 && p.lecteur.en_passage() => p.lecteur.aller_a(t),
+                        _ => {}
+                    }
                 }
             }
             if let Some(e) = p.ecrire_si_besoin(false) {
@@ -1212,6 +1245,12 @@ impl Application for Monteur {
                     p.preparer();
                     self.message = "Préparation en cours : voix, mouvement de l'image, gestes, silences…".into();
                 }
+                if ui.menu_item_enabled_selected_no_shortcut("Proposer les chapitres", false, pret)
+                    && let Some(p) = &mut self.prise
+                {
+                    let dossiers = [p.dossier().to_path_buf(), chemin_fiches().with_file_name("gestes")];
+                    self.message = p.proposer_chapitres(&dossiers);
+                }
                 if ui.menu_item_enabled_selected_no_shortcut("Refaire les sous-titres", false, pret)
                     && let Some(p) = &mut self.prise
                 {
@@ -1291,7 +1330,7 @@ impl Application for Monteur {
             };
             let video = p.video.clone();
             let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().clone();
-            self.youtube.dessiner(ui, &fiche, &video, self.envoi.as_ref());
+            self.youtube.dessiner(ui, &fiche, &video, &p.montage, self.envoi.as_ref());
         });
         // Hors de l'onglet : il n'est dessiné que s'il est devant.
         if std::mem::take(&mut self.vignette.ecrite) {

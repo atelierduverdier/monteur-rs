@@ -110,3 +110,31 @@ fn memoire_bornee() {
     println!("au plus {pire} image(s) gardée(s) hors de la file");
     assert!(pire <= 1, "{pire} images gardées");
 }
+
+/// Un passage accéléré : l'image va quatre fois plus vite, un saut en sort.
+#[test]
+fn passage_accelere() {
+    let Some(p) = prise() else { return };
+    let _tour = UN_A_LA_FOIS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut l = media::Lecteur::ouvrir(&p, 94.6, false).unwrap();
+    l.aller_a(10.0);
+    l.lire();
+    l.commencer_passage(4.0);
+    let debut = Instant::now();
+    let mut derniere = 0.0;
+    while debut.elapsed() < Duration::from_secs(1) {
+        if let Some(i) = l.image() {
+            derniere = i.t;
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    let pos = l.position();
+    println!("1 s à ×4 : position {pos:.2} s, image {derniere:.2} s");
+    assert!((pos - 14.0).abs() < 0.1, "position {pos}");
+    assert!((derniere - 14.0).abs() < 0.2, "l'image suit : {derniere}");
+    l.aller_a(pos);
+    assert!(!l.en_passage(), "un saut sort du passage");
+    let t = l.position();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!((l.position() - t - 0.5).abs() < 0.08, "de nouveau à vitesse normale");
+}

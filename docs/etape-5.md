@@ -18,3 +18,8 @@ réécrite, lien, `--confidentialite privee` reçu. Le déroulé d'essai refuse 
 programme. **Aucun envoi réel n'a été fait.**
 
 « Ranger » n'est pas repris : un projet tient déjà tout dans son dossier.
+
+**Chapitres dans la description** : « Insérer les chapitres » écrit le bloc aux temps de la vidéo
+envoyée (coupes retirées, accélérés raccourcis, vignette comptée) et remplace l'ancien bloc. Ce que
+YouTube refuserait s'affiche dessous. Sur la prise du 04/11 à 07:59, avec un accéléré ajouté : 0:00
+Croquis, 12:31 Usinage, 17:14 Simulation, 22:44 Pilotage.

@@ -260,3 +260,67 @@ pub fn ecrire_srt(chemin: &Path, montage: &Montage, decalage: f64) -> std::io::R
     crate::ecriture::ecrire_atomique(chemin, "srt", texte.as_bytes())?;
     Ok(texte.matches(" --> ").count())
 }
+
+/// Coupe un texte en deux à peu près à la part `part` (0..1) de ses mots ; `None` s'il n'a qu'un mot.
+pub fn couper_texte(texte: &str, part: f64) -> Option<(String, String)> {
+    let m = mots(texte);
+    if m.len() < 2 {
+        return None;
+    }
+    let i = ((part * m.len() as f64).round() as usize).clamp(1, m.len() - 1);
+    Some((m[..i].join(" "), m[i..].join(" ")))
+}
+
+/// L'instant `t` de la prise dans la vidéo montée : coupes et accélérés retirés, vidéos intercalées
+/// avant lui ajoutées.
+pub fn temps_dans_le_montage(m: &Montage, t: f64) -> f64 {
+    let ajoute: f64 = m.insertions.iter().filter(|i| !i.par_dessus() && i.t <= t).map(|i| i.duree()).sum();
+    temps_monte(&son_retire(m), t) + ajoute
+}
+
+/// « 1:02 », « 1:02:03 » : comme YouTube les lit dans une description.
+pub fn temps_youtube(t: f64) -> String {
+    let s = t.max(0.0).floor() as i64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// Les chapitres pour une description YouTube, aux temps de la vidéo envoyée (`decalage` : les 3 s
+/// de vignette). Le premier est toujours à 0:00, sinon YouTube ne les reconnaît pas.
+pub fn texte_chapitres(m: &Montage, decalage: f64) -> String {
+    let mut lignes = Vec::new();
+    for (i, c) in m.chapitres.iter().enumerate() {
+        let t = if i == 0 { 0.0 } else { temps_dans_le_montage(m, c.t) + decalage };
+        lignes.push(format!("{} {}", temps_youtube(t), c.titre.trim()));
+    }
+    lignes.join("\n")
+}
+
+/// Ce qui empêcherait YouTube de reconnaître les chapitres : 3 au moins, 10 s chacun au moins.
+pub fn problemes_chapitres(m: &Montage) -> Vec<String> {
+    let mut p = Vec::new();
+    if m.chapitres.is_empty() {
+        return p;
+    }
+    if m.chapitres.len() < 3 {
+        p.push(format!("il faut 3 chapitres au moins pour YouTube ({} posé(s))", m.chapitres.len()));
+    }
+    let t: Vec<f64> = m.chapitres.iter().map(|c| temps_dans_le_montage(m, c.t)).collect();
+    if t.windows(2).any(|w| w[1] - w[0] < 10.0) {
+        p.push("deux chapitres à moins de 10 s l'un de l'autre : YouTube les refuserait".into());
+    }
+    p
+}
+
+/// La description où remplacer les chapitres : les anciennes lignes « 1:02 Titre » retirées, le
+/// bloc neuf à la fin du texte.
+pub fn inserer_chapitres(texte: &str, chapitres: &str) -> String {
+    let est_chapitre = |l: &str| {
+        let t = l.split_whitespace().next().unwrap_or("");
+        t.contains(':') && t.chars().all(|c| c.is_ascii_digit() || c == ':') && l.len() > t.len()
+    };
+    let reste: Vec<&str> = texte.lines().filter(|l| !est_chapitre(l)).collect();
+    let reste = reste.join("\n");
+    let reste = reste.trim();
+    if reste.is_empty() { chapitres.to_string() } else { format!("{reste}\n\n{chapitres}") }
+}

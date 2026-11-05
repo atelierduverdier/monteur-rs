@@ -18,6 +18,7 @@ pub enum Sorte {
     SousTitre,
     Coupe,
     Insertion,
+    Chapitre,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +198,7 @@ impl Prise {
             Sorte::SousTitre if c.indice < m.sous_titres.len() => drop(m.sous_titres.remove(c.indice)),
             Sorte::Coupe if c.indice < m.coupes.len() => drop(m.coupes.remove(c.indice)),
             Sorte::Insertion if c.indice < m.insertions.len() => drop(m.insertions.remove(c.indice)),
+            Sorte::Chapitre if c.indice < m.chapitres.len() => drop(m.chapitres.remove(c.indice)),
             _ => {}
         }
         self.modifie();
@@ -324,6 +326,98 @@ impl Prise {
         }
         d.2 = s;
         d.1.image_a(s)
+    }
+
+    /// S : coupe en deux, à la tête de lecture, l'élément choisi. Un sous-titre partage ses mots.
+    pub fn scinder(&mut self, t: f64) -> String {
+        let Some(c) = self.choix else { return "Choisis d'abord un élément dans la ligne de temps.".into() };
+        let Some((a, b)) = crate::ligne::intervalle(&self.montage, c) else { return String::new() };
+        if !(a + 0.05 < t && t < b - 0.05) {
+            return "La tête de lecture doit être dans l'élément choisi.".into();
+        }
+        self.retenir();
+        let t = noyau::arrondi::arrondi(t, 3);
+        let i = c.indice;
+        let m = &mut self.montage;
+        let fait = match c.sorte {
+            Sorte::Zoom => {
+                let mut n = m.zooms[i].clone();
+                (m.zooms[i].fin, n.debut) = (t, t);
+                m.zooms.push(n);
+                true
+            }
+            Sorte::Etiquette => {
+                let mut n = m.etiquettes[i].clone();
+                (m.etiquettes[i].fin, n.debut) = (t, t);
+                m.etiquettes.push(n);
+                true
+            }
+            Sorte::Coupe => {
+                let mut n = m.coupes[i].clone();
+                (m.coupes[i].fin, n.debut) = (t, t);
+                m.coupes.push(n);
+                true
+            }
+            Sorte::SousTitre => {
+                let s = &m.sous_titres[i];
+                match noyau::sous_titres::couper_texte(&s.texte, (t - a) / (b - a)) {
+                    Some((avant, apres)) => {
+                        let mut n = s.clone();
+                        n.debut = t;
+                        n.texte = apres;
+                        let s = &mut m.sous_titres[i];
+                        s.fin = t;
+                        s.texte = avant;
+                        m.sous_titres.push(n);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Sorte::Insertion if m.insertions[i].par_dessus() => {
+                let mut n = m.insertions[i].clone();
+                let milieu = noyau::arrondi::arrondi(n.debut + (t - n.t), 3);
+                (n.t, n.debut, m.insertions[i].fin) = (t, milieu, milieu);
+                m.insertions.push(n);
+                true
+            }
+            _ => false,
+        };
+        if !fait {
+            self.avant.pop();
+            return "Cet élément ne se coupe pas en deux.".into();
+        }
+        self.montage.trier();
+        self.choix = None;
+        self.modifie();
+        "Coupé en deux à la tête de lecture.".into()
+    }
+
+    /// M : un chapitre à la tête de lecture, choisi pour lui donner son titre.
+    pub fn poser_chapitre(&mut self, t: f64) {
+        self.retenir();
+        let t = noyau::arrondi::arrondi(t, 3);
+        let titre = format!("Chapitre {}", self.montage.chapitres.len() + 1);
+        self.montage.chapitres.push(noyau::montage::Chapitre { t, titre, origine: "main".into(), autres: Default::default() });
+        self.montage.trier();
+        let indice = self.montage.chapitres.iter().position(|c| c.t == t);
+        self.choix = indice.map(|indice| Choix { sorte: Sorte::Chapitre, indice });
+        self.modifie();
+    }
+
+    /// Les chapitres d'après les ateliers visités. Ceux posés à la main restent.
+    pub fn proposer_chapitres(&mut self, dossiers: &[PathBuf]) -> String {
+        let Some(j) = noyau::journal::trouver_journal(&self.video, self.montage.duree, dossiers) else {
+            return "Pas de journal de gestes pour cette prise : rien à proposer.".into();
+        };
+        let proposes = noyau::analyse::chapitres_des_ateliers(&j, &self.montage, &self.video);
+        self.retenir();
+        self.montage.chapitres.retain(|c| c.origine != "journal");
+        let n = proposes.len();
+        self.montage.chapitres.extend(proposes);
+        self.montage.trier();
+        self.modifie();
+        format!("{n} chapitre(s) proposé(s) : un par atelier visité.")
     }
 
     /// Un zoom neuf de 3 s à la tête de lecture, choisi : on trace son cadre dans la visionneuse.

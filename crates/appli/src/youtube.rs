@@ -131,6 +131,13 @@ pub struct Youtube {
     pub demande: bool,
 }
 
+/// Les chapitres aux temps de la vidéo envoyée, dans le texte de la description.
+pub fn inserer_chapitres(d: &mut Description, video: &Path, montage: &noyau::montage::Montage) {
+    let avec_vignette = noyau::chemin_derive(video, noyau::SUFFIXE_PNG).exists();
+    let decalage = if avec_vignette { noyau::DUREE_VIGNETTE } else { 0.0 };
+    d.texte = noyau::sous_titres::inserer_chapitres(&d.texte, &noyau::sous_titres::texte_chapitres(montage, decalage));
+}
+
 impl Youtube {
     pub fn new() -> Self {
         Self { description: Description::default(), pour: None, a_ecrire: None, confirmer: false, demande: false }
@@ -165,7 +172,7 @@ impl Youtube {
     }
 
     /// Le panneau ; la fiche n'y est que lue.
-    pub fn dessiner(&mut self, ui: &Ui, fiche: &Fiche, video: &Path, envoi: Option<&Envoi>) {
+    pub fn dessiner(&mut self, ui: &Ui, fiche: &Fiche, video: &Path, montage: &noyau::montage::Montage, envoi: Option<&Envoi>) {
         let d = &mut self.description;
         let mut change = false;
         let largeur = ui.push_item_width(-1.0);
@@ -179,6 +186,17 @@ impl Youtube {
         if ui.button("Proposer d'après la vignette") {
             *d = description_proposee(fiche);
             change = true;
+        }
+        ui.same_line();
+        if ui.button("Insérer les chapitres") {
+            inserer_chapitres(d, video, montage);
+            change = true;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Aux temps de la vidéo envoyée : coupes retirées, vignette comptée.");
+        }
+        for p in noyau::sous_titres::problemes_chapitres(montage) {
+            ui.text_colored(charte::c(charte::ALERTE), format!("Chapitres : {p}"));
         }
         if change {
             self.a_ecrire = Some(Instant::now());
