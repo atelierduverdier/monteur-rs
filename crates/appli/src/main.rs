@@ -8,6 +8,7 @@ mod capture;
 mod etat;
 mod ligne;
 mod miniatures;
+mod outils;
 mod raccourci;
 mod scenario;
 mod vignette;
@@ -60,7 +61,7 @@ impl Panneaux {
     fn disposition(&self) -> DockLayout {
         DockLayout::split(
             DockSplit::Down,
-            0.30,
+            0.38,
             DockLayout::tabs([&self.ligne]),
             DockLayout::split(
                 DockSplit::Left,
@@ -147,7 +148,7 @@ fn bouton_forme(ui: &Ui, id: &str, forme: Forme, primaire: bool, aide: &str) -> 
 }
 
 /// La hauteur du ruban, sous la barre de menus.
-const RUBAN: f32 = 44.0;
+const RUBAN: f32 = 64.0;
 
 /// Un rendu en fond : on continue de monter pendant ce temps.
 /// Un rendu de la file : montage et voix figés au moment où il y entre.
@@ -370,6 +371,19 @@ impl Monteur {
     }
 
     /// La prise ouverte part dans le projet `nom`, avec tout ce qui l'accompagne.
+    /// Le dossier affiché, dans le gestionnaire de fichiers.
+    fn ouvrir_le_dossier(&mut self) {
+        let lance = std::process::Command::new("xdg-open")
+            .arg(&self.dossier.chemin)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Err(e) = lance {
+            self.message = format!("Dossier non ouvert : {e}");
+        }
+    }
+
     fn ranger_dans_un_projet(&mut self, nom: &str) {
         let Some(mut p) = self.prise.take() else { return };
         if let Some(e) = p.ecrire_si_besoin(true) {
@@ -381,8 +395,9 @@ impl Monteur {
         self.ecrire_fiches();
         match noyau::projets::ranger_dans_un_projet(&mut self.fiches, &chemin_fiches(), &video, &self.racine, nom) {
             Ok(nouvelle) => {
-                self.message = format!("Rangée dans le projet « {} ».", nom.trim());
-                self.changer_de_dossier(nouvelle.parent().unwrap_or(&self.racine).to_path_buf());
+                let dossier = nouvelle.parent().unwrap_or(&self.racine).to_path_buf();
+                self.message = format!("Projet « {} » : la prise et ses fichiers sont maintenant dans {}.", nom.trim(), dossier.display());
+                self.changer_de_dossier(dossier);
                 self.a_ouvrir = Some(nouvelle);
             }
             Err(e) => {
@@ -433,7 +448,7 @@ impl Monteur {
         }
         self.fermer_prise();
         self.changer_de_dossier(dossier);
-        self.message = format!("Projet « {nom} » créé : Fichier › Ajouter une prise au projet.");
+        self.message = format!("Projet « {nom} » créé dans {} : Fichier › Ajouter une prise au projet.", self.dossier.chemin.display());
     }
 
     fn fermer_prise(&mut self) {
@@ -906,6 +921,16 @@ impl Monteur {
             self.a_changer = Some(chemin);
         }
         drop(largeur);
+        // Où c'est sur le disque : le projet est un dossier, on doit pouvoir le retrouver.
+        let maison = std::env::home_dir().unwrap_or_default();
+        let lieu = self.dossier.chemin.strip_prefix(&maison).map_or(self.dossier.chemin.display().to_string(), |r| format!("~/{}", r.display()));
+        {
+            let _gris = ui.push_style_color(StyleColor::Text, charte::c(charte::UNIT));
+            ui.text_wrapped(&lieu);
+        }
+        if ui.small_button("Ouvrir le dossier") {
+            self.ouvrir_le_dossier();
+        }
         ui.spacing();
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
         const HAUT: f32 = 58.0;
@@ -956,152 +981,100 @@ impl Monteur {
 
     /// Sous la barre de menus : ce qu'on fait le plus souvent, en vue.
     fn ruban(&mut self, ui: &Ui) {
+        use outils::{Allure, Icone, filet, outil};
+        let t = charte::TEXT;
         let pret = self.prise.as_ref().is_some_and(|p| p.preparation.is_none());
-        let primaire = (
-            ui.push_style_color(StyleColor::Button, charte::c(charte::ACCENT)),
-            ui.push_style_color(StyleColor::ButtonHovered, charte::c(charte::ACCENT_HOVER)),
-            ui.push_style_color(StyleColor::ButtonActive, charte::c(charte::ACCENT_PRESSED)),
-            ui.push_style_color(StyleColor::Text, charte::c(charte::ENCRE_SUR_ACCENT)),
-        );
-        let preparer = {
-            let _f = self.gras.map(|f| ui.push_font(f));
-            ui.button_with_size("Préparer le montage", [170.0, 30.0])
-        };
-        primaire.3.pop();
-        primaire.2.pop();
-        primaire.1.pop();
-        primaire.0.pop();
-        if preparer
+        if outil(ui, "##preparer", Icone::Preparer, "Préparer le montage", t, Allure::Primaire, "Zooms, étiquettes, sous-titres, temps morts : tout d'un coup.")
             && pret
             && let Some(p) = &mut self.prise
         {
             p.preparer();
             self.message = "Préparation en cours : voix, mouvement de l'image, gestes, silences…".into();
         }
-        ui.same_line();
-        if ui.button_with_size("Rendre…", [0.0, 30.0]) {
+        filet(ui);
+        if outil(ui, "##rendre", Icone::Rendre, "Rendre", t, Allure::Simple, "Préréglages et file d'attente.") {
             self.fenetre_rendre = true;
         }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Préréglages et file d'attente.");
-        }
         ui.same_line();
-        if ui.button_with_size("Voix…", [0.0, 30.0]) {
+        if outil(ui, "##voix", Icone::Voix, "Voix", charte::SUCCES, Allure::Simple, "Nettoyer la voix, écouter avant et après.") {
             self.voix.ouvrir();
         }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Nettoyer la voix, écouter avant et après.");
-        }
-        ui.same_line();
+        filet(ui);
         if let Some(c) = &mut self.capture {
-            // Trois `let` : ImGui exige de les retirer à l'envers, ce que ferait mal un tableau.
-            let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ERREUR));
-            let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::vec(charte::ERREUR, 0.85));
-            let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::vec(charte::ERREUR, 0.7));
             let texte = match (c.temps(), c.decompte_restant()) {
                 _ if c.en_finition() => "Finition du son…".to_string(),
                 (_, Some(n)) => format!("Départ dans {n}"),
                 (Some(t), _) => format!("Arrêter {}", chrono_court(t)),
                 _ => "Annuler le choix".to_string(),
             };
-            if ui.button_with_size(format!("{texte}###arret_capture"), [0.0, 30.0]) {
+            if outil(ui, "##arret_capture", Icone::Filmer, &texte, charte::ERREUR, Allure::EnCours, "") {
                 c.arreter();
             }
-            drop((_appui, _survol, _repos));
             if let Some(db) = c.niveau().filter(|_| !c.en_finition()) {
                 ui.same_line();
                 vu_metre(ui, db, c.micro_muet());
             }
         } else {
-            if ui.button_with_size("Filmer…", [0.0, 30.0]) {
+            if outil(ui, "##filmer", Icone::Filmer, "Filmer", charte::ERREUR, Allure::Simple, "Filme une fenêtre, sans OBS. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer.") {
                 self.capture_prevue = None;
                 self.filmer_ecran();
             }
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Filme une fenêtre, sans OBS. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer.");
-            }
             ui.same_line();
-            if ui.button_with_size("Filmer VerdierCAM…", [0.0, 30.0]) {
+            if outil(ui, "##verdier", Icone::Verdier, "Filmer VerdierCAM", t, Allure::Simple, "Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.") {
                 self.filmer();
-            }
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.");
             }
         }
         let Some(p) = &mut self.prise else { return };
-        ui.same_line();
-        ui.dummy([12.0, 1.0]);
-        ui.same_line();
-        if ui.button_with_size("Annuler", [0.0, 30.0]) {
+        filet(ui);
+        if outil(ui, "##annuler", Icone::Annuler, "Annuler", t, Allure::Simple, "Ctrl+Z") {
             p.defaire();
         }
         ui.same_line();
-        if ui.button_with_size("Rétablir", [0.0, 30.0]) {
+        if outil(ui, "##retablir", Icone::Retablir, "Rétablir", t, Allure::Simple, "Ctrl+Maj+Z") {
             p.refaire();
         }
     }
 
     /// Les gestes de montage, au-dessus de la ligne de temps : là où on les fait.
     fn barre_montage(&mut self, ui: &Ui) {
-        const H: f32 = 26.0;
+        use outils::{Allure, Icone, filet, outil};
+        let c = charte::TEXT;
         let Some(p) = &mut self.prise else { return };
         let t = p.lecteur.position();
-        if p.coupe_commencee.is_some() {
-            let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ACCENT));
-            let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::c(charte::ACCENT_HOVER));
-            let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::c(charte::ACCENT_PRESSED));
-            let _encre = ui.push_style_color(StyleColor::Text, charte::c(charte::ENCRE_SUR_ACCENT));
-            if ui.button_with_size("Valider la coupe", [0.0, H]) {
-                self.message = p.marquer_coupe(t);
-            }
-        } else if ui.button_with_size("Couper (C)", [0.0, H]) {
+        let en_cours = p.coupe_commencee.is_some();
+        let (icone, nom, allure) = if en_cours { (Icone::Valider, "Valider la coupe", Allure::EnCours) } else { (Icone::Couper, "Couper (C)", Allure::Simple) };
+        if outil(ui, "##couper", icone, nom, c, allure, "Une première fois au début du passage, puis clic droit, Entrée ou C à sa fin. Échap abandonne.") {
             self.message = p.marquer_coupe(t);
         }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Une première fois au début du passage, puis clic droit, Entrée ou C à sa fin. Échap abandonne.");
-        }
         ui.same_line();
-        if ui.button_with_size("Scinder (S)", [0.0, H]) {
+        if outil(ui, "##scinder", Icone::Scinder, "Scinder (S)", c, Allure::Simple, "Coupe en deux l'élément choisi, à la tête de lecture.") {
             self.message = p.scinder(t);
         }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Coupe en deux l'élément choisi, à la tête de lecture.");
-        }
         ui.same_line();
-        if ui.button_with_size("Couper avant", [0.0, H]) {
+        if outil(ui, "##avant", Icone::CouperAvant, "Couper avant", c, Allure::Simple, "Retire tout ce qui précède la tête de lecture.") {
             p.ajouter_coupe(0.0, t);
         }
         ui.same_line();
-        if ui.button_with_size("Couper après", [0.0, H]) {
+        if outil(ui, "##apres", Icone::CouperApres, "Couper après", c, Allure::Simple, "Retire tout ce qui suit la tête de lecture.") {
             p.ajouter_coupe(t, p.montage.duree);
         }
-        ui.same_line();
-        ui.dummy([12.0, 1.0]);
-        ui.same_line();
-        if ui.button_with_size("Nouveau zoom (Z)", [0.0, H]) {
+        filet(ui);
+        if outil(ui, "##zoom", Icone::Zoom, "Zoom (Z)", charte::PISTE_ZOOM, Allure::Simple, "Un zoom à la tête de lecture : trace son cadre dans la visionneuse.") {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
         }
         ui.same_line();
-        if ui.button_with_size("Chapitre (M)", [0.0, H]) {
+        if outil(ui, "##chapitre", Icone::Chapitre, "Chapitre (M)", charte::MARQUEUR, Allure::Simple, "Un chapitre à la tête de lecture.") {
             p.poser_chapitre(t);
             self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();
         }
-        ui.same_line();
-        ui.dummy([12.0, 1.0]);
-        ui.same_line();
-        if ui.button_with_size("Intercaler une vidéo…", [0.0, H]) {
+        filet(ui);
+        if outil(ui, "##intercaler", Icone::Intercaler, "Intercaler", c, Allure::Simple, "À la tête de lecture : la prise s'arrête, la vidéo passe avec son son, la prise reprend.") {
             self.inserer_une_video(false);
         }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("À la tête de lecture : la prise s'arrête, la vidéo passe avec son son, la prise reprend.");
-        }
         ui.same_line();
-        if ui.button_with_size("Vidéo par-dessus…", [0.0, H]) {
+        if outil(ui, "##dessus", Icone::Dessus, "Par-dessus", c, Allure::Simple, "À la tête de lecture : la vidéo remplace l'image, ta voix continue.") {
             self.inserer_une_video(true);
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip_text("À la tête de lecture : elle remplace l'image, ta voix continue.");
         }
     }
 
@@ -1179,6 +1152,8 @@ impl Monteur {
             ui.open_popup("Nouveau projet");
         }
         if let Some(boite) = ui.begin_modal_popup("Nouveau projet") {
+            ui.text_wrapped("Un projet est un dossier : la vidéo, sa vignette, son montage et ses rendus y sont rangés ensemble.");
+            ui.spacing();
             ui.text("Le nom du projet :");
             let l = ui.push_item_width(380.0);
             let entree = ui.input_text("##nom", &mut self.nom_projet).enter_returns_true(true).build();
@@ -1658,6 +1633,16 @@ impl Application for Monteur {
                 if ui.menu_item_enabled_selected_no_shortcut("Ajouter une prise au projet…", false, dans_projet) {
                     self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Vidéos (*.mp4 *.mkv *.mov)"));
                 }
+                if ui.menu_item("Ouvrir le dossier sur le disque") {
+                    self.ouvrir_le_dossier();
+                }
+                ui.separator();
+                if ui.menu_item_enabled_selected_with_shortcut("Enregistrer le projet", "Ctrl+S", false, self.prise.is_some()) {
+                    self.enregistrer();
+                }
+                if ui.menu_item("Rendre…") {
+                    self.fenetre_rendre = true;
+                }
                 ui.separator();
                 let jeton = chemin_jeton_portail();
                 if ui.menu_item_enabled_selected_no_shortcut("Filmer une autre fenêtre…", false, self.capture.is_none()) {
@@ -1668,12 +1653,6 @@ impl Application for Monteur {
                     && let Some(p) = &self.prise
                 {
                     self.demander_corbeille(p.video.clone());
-                }
-                if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
-                    self.enregistrer();
-                }
-                if ui.menu_item("Rendre…") {
-                    self.fenetre_rendre = true;
                 }
                 m.end();
             }

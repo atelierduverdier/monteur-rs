@@ -104,3 +104,17 @@ et la vue laisse 3 s à celui qui défile à la molette.
 
 **Valider une coupe** : clic droit sur la ligne de temps, Entrée, C, ou le bouton « Valider la coupe ».
 
+## Remarques de Christophe, vidéos du 05/11/2026 à 17:03 et 17:05
+
+**Vignette** : l'onglet ouvert, cliquer dans la ligne de temps donne l'image de cet instant. La note
+sous « Écrire la vignette » dit où elle part.
+
+**Projets** : le dossier se voit maintenant sous la liste, avec « Ouvrir le dossier ». Le menu Fichier
+est rangé par gestes, et « Enregistrer » y devient « Enregistrer le projet ».
+
+**Boutons** : le ruban et la barre de montage suivent la maquette (`outils.rs`) : une icône dessinée,
+son nom dessous, rien au repos, un fond au survol, un filet entre les groupes.
+
+`outils/voir-fenetre.sh` montre la fenêtre dans un KWin virtuel à part : pas besoin du bureau de
+Christophe, ni de capturer sa fenêtre active.
+

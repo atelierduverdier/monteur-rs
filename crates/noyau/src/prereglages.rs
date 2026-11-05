@@ -39,7 +39,7 @@ pub const PREREGLAGES: [Prereglage; 5] = [
     },
     Prereglage {
         nom: "Court vertical 9:16",
-        detail: "1080 × 1920 · centre de l'image · 60 s au plus",
+        detail: "1080 × 1920 · centre · 60 s au plus",
         suffixe: crate::SUFFIXE_COURT,
         image: Some("crop=ih*9/16:ih,scale=1080:1920:flags=lanczos"),
         x264: Some(("20", "medium")),

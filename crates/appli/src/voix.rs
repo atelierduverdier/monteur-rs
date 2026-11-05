@@ -101,8 +101,7 @@ fn curseur(ui: &Ui, nom: &str, v: &mut f64, min: f32, max: f32, format: &str) ->
 }
 
 /// Une carte : sa case, une ligne d'explication, ses curseurs.
-fn carte(ui: &Ui, id: &str, nom: &str, explication: &str, active: &mut bool, reglages: impl FnOnce(&Ui) -> bool) -> bool {
-    let l = (ui.content_region_avail()[0] - 8.0) / 2.0;
+fn carte(ui: &Ui, l: f32, id: &str, nom: &str, explication: &str, active: &mut bool, reglages: impl FnOnce(&Ui) -> bool) -> bool {
     let mut change = false;
     ui.child_window(id).size([l, 128.0]).border(true).build(ui, || {
         change |= ui.checkbox(nom, active);
@@ -202,28 +201,30 @@ impl FenetreVoix {
             };
             ui.text_colored(charte::c(charte::TEXT_2), etat);
             ui.spacing();
+            // Une seule largeur : calculée à chaque carte, la seconde colonne sortait plus étroite.
+            let l = (ui.content_region_avail()[0] - 8.0) / 2.0;
             let r = &mut self.reglages;
-            change |= carte(ui, "c1", "Réduire le bruit", "Souffle du PC et ventilation.", &mut r.bruit, |ui| {
+            change |= carte(ui, l, "c1", "Réduire le bruit", "Souffle du PC et ventilation.", &mut r.bruit, |ui| {
                 let mut p = r.bruit_force * 100.0;
                 let c = curseur(ui, "Force##bruit", &mut p, 0.0, 100.0, "%.0f %%");
                 r.bruit_force = p / 100.0;
                 c
             });
             ui.same_line();
-            change |= carte(ui, "c2", "Couper le grave", "Chocs sur le bureau, ronflement.", &mut r.grave, |ui| curseur(ui, "Fréquence", &mut r.grave_hz, 40.0, 200.0, "%.0f Hz"));
-            change |= carte(ui, "c3", "Égaliser la voix", "Rapproche passages forts et faibles.", &mut r.egaliser, |ui| {
+            change |= carte(ui, l, "c2", "Couper le grave", "Chocs sur le bureau, ronflement.", &mut r.grave, |ui| curseur(ui, "Fréquence", &mut r.grave_hz, 40.0, 200.0, "%.0f Hz"));
+            change |= carte(ui, l, "c3", "Égaliser la voix", "Rapproche passages forts et faibles.", &mut r.egaliser, |ui| {
                 let c = curseur(ui, "Rapport", &mut r.rapport, 1.5, 8.0, "%.1f:1");
                 ui.set_next_item_width(ui.content_region_avail()[0] - 110.0);
                 c | curseur(ui, "Seuil", &mut r.seuil_db, -40.0, -6.0, "%.0f dB")
             });
             ui.same_line();
-            change |= carte(ui, "c4", "Adoucir les « s »", "Atténue les sifflantes trop vives.", &mut r.adoucir, |ui| {
+            change |= carte(ui, l, "c4", "Adoucir les « s »", "Atténue les sifflantes trop vives.", &mut r.adoucir, |ui| {
                 let mut p = r.adoucir_force * 100.0;
                 let c = curseur(ui, "Force##s", &mut p, 0.0, 100.0, "%.0f %%");
                 r.adoucir_force = p / 100.0;
                 c
             });
-            change |= carte(ui, "c5", "Niveau YouTube", "Même volume partout, sans saturer.", &mut r.niveau, |ui| {
+            change |= carte(ui, l, "c5", "Niveau YouTube", "Même volume partout, sans saturer.", &mut r.niveau, |ui| {
                 let c = curseur(ui, "Niveau visé", &mut r.niveau_lufs, -24.0, -10.0, "%.0f LUFS");
                 ui.set_next_item_width(ui.content_region_avail()[0] - 110.0);
                 c | curseur(ui, "Crête max", &mut r.crete_db, -3.0, 0.0, "%.1f dB")
