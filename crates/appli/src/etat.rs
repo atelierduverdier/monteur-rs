@@ -122,6 +122,11 @@ impl Prise {
         self.version += 1;
     }
 
+    /// Tout est-il écrit ?
+    pub fn enregistre(&self) -> bool {
+        self.a_ecrire.is_none()
+    }
+
     pub fn defaire(&mut self) {
         if let Some(m) = self.avant.pop() {
             self.apres.push(std::mem::replace(&mut self.montage, m));

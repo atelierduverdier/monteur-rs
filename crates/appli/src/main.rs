@@ -171,6 +171,13 @@ struct Monteur {
     ouvrir_boite: bool,
     nom_projet: String,
     vignette: vignette::Vignette,
+    bande: miniatures::Bande,
+    bande_neuve: bool,
+    /// Quand on a regardé le dossier pour la dernière fois.
+    regarde: std::time::Instant,
+    /// Une prise ou un fichier projet choisis dans le dialogue de KDE.
+    prise_choisie: Option<Receiver<String>>,
+    projet_choisi: Option<Receiver<String>>,
     /// Une vidéo qu'on importe, en fond : son chemin relatif, sa durée, par-dessus ?, l'instant.
     import: Option<Receiver<Result<Option<(String, f64, bool, f64)>, String>>>,
     /// Un déroulé d'essai (`MONTEUR2_SCENARIO`), sinon rien.
@@ -230,6 +237,11 @@ impl Monteur {
             ouvrir_boite: false,
             nom_projet: String::new(),
             vignette: vignette::Vignette::new(),
+            bande: miniatures::Bande::vide(),
+            bande_neuve: false,
+            regarde: std::time::Instant::now(),
+            prise_choisie: None,
+            projet_choisi: None,
             import: None,
             scenario: scenario::Scenario::depuis_l_environnement(),
         }
@@ -268,6 +280,115 @@ impl Monteur {
                 self.message = e.0;
                 self.a_ouvrir = Some(video);
             }
+        }
+    }
+
+    /// Écrit tout : le montage, les fiches, et le fichier projet `<vidéo>.monteur`.
+    fn enregistrer(&mut self) {
+        if self.fiches_sales {
+            self.ecrire_fiches();
+        }
+        let Some(p) = &mut self.prise else { return };
+        if let Some(e) = p.ecrire_si_besoin(true) {
+            self.message = e;
+            return;
+        }
+        let description = noyau::description::Description::lire(&noyau::chemin_derive(&p.video, noyau::SUFFIXE_DESCRIPTION)).unwrap_or_default();
+        let projet = noyau::projet::Projet {
+            video: p.video.clone(),
+            fiche: self.fiches.fiches.get(&noyau::videos::cle(&p.video)).cloned().unwrap_or_default(),
+            description,
+            montage: Some(p.montage.en_valeur()),
+            taille: std::fs::metadata(&p.video).map_or(0, |m| m.len()),
+            ..Default::default()
+        };
+        let chemin = noyau::chemin_derive(&p.video, noyau::EXTENSION_PROJET);
+        self.message = match projet.ecrire(&chemin, env!("CARGO_PKG_VERSION")) {
+            Ok(()) => format!("Projet enregistré : {}", chemin.display()),
+            Err(e) => format!("Projet non écrit : {e}"),
+        };
+    }
+
+    /// Un projet tout neuf : la prise d'OBS ouverte y part ; sinon, un dossier vide où en ajouter.
+    fn nouveau_projet(&mut self, nom: &str) {
+        let hors_projet = self.prise.as_ref().is_some_and(|p| !p.dossier().starts_with(&self.racine));
+        if hors_projet {
+            self.ranger_dans_un_projet(nom);
+            return;
+        }
+        let Some(nom) = noyau::projets::nom_de_projet(nom) else { return };
+        let dossier = self.racine.join(&nom);
+        if let Err(e) = std::fs::create_dir_all(&dossier) {
+            self.message = format!("{} : {e}", dossier.display());
+            return;
+        }
+        self.fermer_prise();
+        self.changer_de_dossier(dossier);
+        self.message = format!("Projet « {nom} » créé : Fichier › Ajouter une prise au projet.");
+    }
+
+    fn fermer_prise(&mut self) {
+        if let Some(mut p) = self.prise.take()
+            && let Some(e) = p.ecrire_si_besoin(true)
+        {
+            self.message = e;
+        }
+        if self.fiches_sales {
+            self.ecrire_fiches();
+        }
+        self.vue.oublier_source();
+    }
+
+    /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera.
+    fn filmer(&mut self) {
+        let programme = std::env::var_os("MONTEUR_VERDIERCAM")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join("VerdierCAM/programmes/VerdierCAM.AppImage"));
+        if !programme.exists() {
+            self.message = format!("VerdierCAM est introuvable : {}", programme.display());
+            return;
+        }
+        let gestes = chemin_fiches().with_file_name("gestes");
+        let _ = std::fs::create_dir_all(&gestes);
+        let lance = std::process::Command::new(&programme)
+            .env("VCAM_JOURNAL_VIDEO", &gestes)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        self.message = match lance {
+            Ok(_) => "VerdierCAM lancé, ses gestes sont notés. Lance l'enregistrement dans OBS.".into(),
+            Err(e) => format!("VerdierCAM n'a pas pu être lancé : {e}"),
+        };
+    }
+
+    /// Le dialogue de fichiers de KDE, en fond ; rend le chemin choisi (vide : abandon).
+    fn dialogue(depart: PathBuf, filtre: &'static str) -> Receiver<String> {
+        let (envoi, recu) = mpsc::channel();
+        std::thread::spawn(move || {
+            let sortie = std::process::Command::new("kdialog").arg("--getopenfilename").arg(&depart).arg(filtre).output();
+            let _ = envoi.send(sortie.map(|s| String::from_utf8_lossy(&s.stdout).trim().to_string()).unwrap_or_default());
+        });
+        recu
+    }
+
+    /// Ouvre un fichier `.monteur` : la vidéo, à son chemin ou retrouvée à côté du fichier.
+    fn ouvrir_fichier_projet(&mut self, chemin: PathBuf) {
+        match noyau::projet::Projet::lire(&chemin) {
+            Ok(projet) => match projet.retrouver_video(&chemin, &[self.copies.clone()]) {
+                Some(video) => {
+                    let montage = etat::chemin_montage(&video);
+                    if !montage.exists()
+                        && let Some(mut m) = projet.montage()
+                    {
+                        let _ = m.ecrire(&montage);
+                    }
+                    self.changer_de_dossier(video.parent().unwrap_or(&self.copies).to_path_buf());
+                    self.a_ouvrir = Some(video);
+                }
+                None => self.message = format!("Sa vidéo est introuvable : {}", projet.video.display()),
+            },
+            Err(e) => self.message = e.0,
         }
     }
 
@@ -317,6 +438,7 @@ impl Monteur {
                 );
                 let fiche = self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().clone();
                 self.vignette.charger(&video, &fiche, p.infos.duree);
+                self.bande_neuve = true;
                 self.prise = Some(p);
             }
             Err(e) => self.message = format!("{} ne s'ouvre pas : {e}", video.display()),
@@ -386,10 +508,8 @@ impl Monteur {
         if ctrl && ui.is_key_pressed(Key::Y) {
             p.refaire();
         }
-        if ctrl && ui.is_key_pressed(Key::S)
-            && let Some(e) = p.ecrire_si_besoin(true)
-        {
-            self.message = e;
+        if ctrl && ui.is_key_pressed(Key::S) {
+            self.enregistrer();
         }
     }
 
@@ -466,6 +586,13 @@ impl Monteur {
             p.preparer();
             self.message = "Préparation en cours : mouvement de l'image, gestes, silences…".into();
         }
+        ui.same_line();
+        if ui.button_with_size("Filmer VerdierCAM…", [0.0, 30.0]) {
+            self.filmer();
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text("Lance VerdierCAM : ses gestes sont notés pour préparer le montage.");
+        }
         let Some(p) = &mut self.prise else { return };
         let t = p.lecteur.position();
         ui.same_line();
@@ -515,15 +642,6 @@ impl Monteur {
         if ui.is_item_hovered() {
             ui.tooltip_text("À la tête de lecture : elle remplace l'image, ta voix continue.");
         }
-        ui.same_line();
-        ui.dummy([12.0, 1.0]);
-        ui.same_line();
-        let dans_projet = self.prise.as_ref().is_some_and(|p| p.dossier().starts_with(&self.racine));
-        if !dans_projet && ui.button_with_size("Nouveau projet…", [0.0, 30.0]) {
-            let cle = self.prise.as_ref().map(|p| noyau::videos::cle(&p.video)).unwrap_or_default();
-            self.nom_projet = self.fiches.fiches.get(&cle).map(|f| f.titre.clone()).unwrap_or_default();
-            self.ouvrir_boite = true;
-        }
     }
 
     /// La boîte « Nouveau projet ».
@@ -536,12 +654,16 @@ impl Monteur {
             let l = ui.push_item_width(380.0);
             let entree = ui.input_text("##nom", &mut self.nom_projet).enter_returns_true(true).build();
             drop(l);
-            ui.text_colored(charte::c(charte::UNIT), format!("La prise et tout ce qui l'accompagne partent dans {}/", self.racine.display()));
+            let part = self.prise.as_ref().is_some_and(|p| !p.dossier().starts_with(&self.racine));
+            ui.text_colored(
+                charte::c(charte::UNIT),
+                if part { format!("La prise et tout ce qui l'accompagne partent dans {}/", self.racine.display()) } else { format!("Un dossier vide dans {}/", self.racine.display()) },
+            );
             let valide = noyau::projets::nom_de_projet(&self.nom_projet).is_some();
             if (ui.button_with_size("Créer le projet", [180.0, 30.0]) || entree) && valide {
                 let nom = self.nom_projet.clone();
                 ui.close_current_popup();
-                self.ranger_dans_un_projet(&nom);
+                self.nouveau_projet(&nom);
             }
             ui.same_line();
             if ui.button_with_size("Annuler##projet", [100.0, 30.0]) {
@@ -583,8 +705,11 @@ impl Monteur {
                 let (fx, fy) = (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0));
                 let proche = coins.iter().position(|c| (c[0] - souris[0]).abs() <= 10.0 && (c[1] - souris[1]).abs() <= 10.0);
                 if ui.is_item_hovered() {
-                    if proche.is_some() {
-                        ui.set_mouse_cursor(Some(MouseCursor::ResizeNWSE));
+                    // Haut gauche et bas droit : « \\ » ; haut droit et bas gauche : « / ».
+                    match proche {
+                        Some(0 | 3) => ui.set_mouse_cursor(Some(MouseCursor::ResizeNWSE)),
+                        Some(_) => ui.set_mouse_cursor(Some(MouseCursor::ResizeNESW)),
+                        None => {}
                     }
                     if ui.is_mouse_clicked(MouseButton::Left) {
                         p.retenir();
@@ -811,6 +936,7 @@ impl Application for Monteur {
         self.vue.perdre(g.gpu());
         self.miniatures.liberer(g.gpu());
         self.vignette.liberer(g.gpu());
+        self.bande.liberer(g.gpu());
         Ok(())
     }
 
@@ -820,6 +946,36 @@ impl Application for Monteur {
             self.scenario = Some(s);
             if fin {
                 context.request_exit();
+            }
+        }
+        // La liste suit le dossier toute seule : une prise d'OBS y apparaît en quelques secondes.
+        if self.regarde.elapsed().as_secs() >= 2 {
+            self.regarde = std::time::Instant::now();
+            // La même lecture que la liste (sans les ignorées) : sinon elle se referait sans fin.
+            if Dossier::lire(&self.dossier.chemin, &self.fiches).prises != self.dossier.prises {
+                self.a_changer = Some(self.dossier.chemin.clone());
+            }
+        }
+        if let Some(r) = &self.prise_choisie
+            && let Ok(chemin) = r.try_recv()
+        {
+            self.prise_choisie = None;
+            if !chemin.is_empty() {
+                match noyau::videos::deplacer(&mut self.fiches, &chemin_fiches(), &PathBuf::from(&chemin), &self.dossier.chemin.clone()) {
+                    Ok(v) => {
+                        self.a_changer = Some(self.dossier.chemin.clone());
+                        self.a_ouvrir = Some(v);
+                    }
+                    Err(e) => self.message = e.0,
+                }
+            }
+        }
+        if let Some(r) = &self.projet_choisi
+            && let Ok(chemin) = r.try_recv()
+        {
+            self.projet_choisi = None;
+            if !chemin.is_empty() {
+                self.ouvrir_fichier_projet(PathBuf::from(chemin));
             }
         }
         if let Some(d) = self.a_changer.take() {
@@ -878,6 +1034,14 @@ impl Application for Monteur {
             self.miniatures.liberer(context.gpu());
             self.miniatures = miniatures::Miniatures::lancer(self.dossier.prises.iter().map(|p| p.0.clone()).collect());
         }
+        if std::mem::take(&mut self.bande_neuve) {
+            self.bande.liberer(context.gpu());
+            self.bande = match &self.prise {
+                Some(p) => miniatures::Bande::lancer(p.video.clone(), p.infos.duree),
+                None => miniatures::Bande::vide(),
+            };
+        }
+        let bande = self.bande.preparer(context.gpu());
         self.miniatures.recevoir(context.gpu());
         let textures = self.miniatures.textures(context.gpu());
         let cle_fiche = self.prise.as_ref().map(|p| noyau::videos::cle(&p.video));
@@ -888,8 +1052,34 @@ impl Application for Monteur {
 
         if let Some(barre) = ui.begin_main_menu_bar() {
             if let Some(m) = ui.begin_menu("Fichier") {
-                if ui.menu_item("Relire le dossier") {
-                    self.a_changer = Some(self.dossier.chemin.clone());
+                if ui.menu_item("Nouveau projet…") {
+                    let cle = self.prise.as_ref().map(|p| noyau::videos::cle(&p.video)).unwrap_or_default();
+                    self.nom_projet = self.fiches.fiches.get(&cle).map(|f| f.titre.clone()).unwrap_or_default();
+                    self.ouvrir_boite = true;
+                }
+                if let Some(o) = ui.begin_menu("Ouvrir un projet") {
+                    if ui.menu_item("Copies d'écran") {
+                        self.a_changer = Some(self.copies.clone());
+                    }
+                    ui.separator();
+                    for p in self.projets.clone() {
+                        if ui.menu_item(p.file_name().unwrap_or_default().to_string_lossy()) {
+                            self.a_changer = Some(p);
+                        }
+                    }
+                    ui.separator();
+                    if ui.menu_item("Un fichier .monteur…") {
+                        self.projet_choisi = Some(Self::dialogue(self.racine.clone(), "Projets du Monteur (*.monteur)"));
+                    }
+                    o.end();
+                }
+                let dans_projet = self.dossier.chemin.starts_with(&self.racine);
+                if ui.menu_item_enabled_selected_no_shortcut("Ajouter une prise au projet…", false, dans_projet) {
+                    self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Vidéos (*.mp4 *.mkv *.mov)"));
+                }
+                ui.separator();
+                if ui.menu_item_enabled_selected_with_shortcut("Enregistrer", "Ctrl+S", false, self.prise.is_some()) {
+                    self.enregistrer();
                 }
                 m.end();
             }
@@ -979,7 +1169,7 @@ impl Application for Monteur {
         ui.window(&panneaux.inspecteur).build(|| self.panneau_inspecteur(ui));
         ui.window(&panneaux.ligne).build(|| {
             if let Some(p) = &mut self.prise {
-                self.ligne.dessiner(ui, p);
+                self.ligne.dessiner(ui, p, (&self.bande, bande));
             }
         });
 
@@ -1001,6 +1191,12 @@ impl Application for Monteur {
                     if let Some(prep) = &p.preparation {
                         ui.same_line();
                         ui.text_colored(charte::c(charte::ACCENT_HOVER), format!("  préparation… {:.0} s", prep.debut.elapsed().as_secs_f64()));
+                    }
+                    ui.same_line_with_pos(taille[0] - 360.0);
+                    if p.enregistre() {
+                        ui.text_colored(charte::c(charte::SUCCES_TEXTE), "● enregistré");
+                    } else {
+                        ui.text_colored(charte::c(charte::ALERTE), "● à écrire");
                     }
                     ui.same_line_with_pos(taille[0] - 260.0);
                     ui.text_colored(charte::c(charte::UNIT), format!("image peinte en {:.1} ms · {:.0} i/s", self.vue.dernier_ms, ui.io().framerate()));

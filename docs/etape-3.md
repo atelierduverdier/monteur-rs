@@ -60,6 +60,15 @@ Décidé avec lui le 05/11/2026, et fait :
 Les fiches sont maintenant écrites par le Monteur 2 aussi ; un fichier illisible est mis de côté,
 jamais écrasé. Le Monteur 2 ne rend pas encore : le rendu (étape 4) devra tenir les insertions.
 
+## Remarques de Christophe, seconde vidéo du 05/11/2026
+
+Faites : le menu Fichier tient Nouveau projet, Ouvrir un projet (les projets, Copies d'écran, un
+fichier `.monteur`), Ajouter une prise au projet, Enregistrer (Ctrl+S : montage, fiches et
+`<vidéo>.monteur`), un témoin « ● enregistré » dans la barre d'état ; la liste suit le dossier
+toute seule ; « Filmer VerdierCAM… » est revenu ; le curseur des coins du cadre suit leur sens ; les
+coupes sont hachurées et celle en cours grandit jusqu'à la tête ; les pistes remplissent le
+panneau (jusqu'au double) ; la piste Vidéos montre la barre de la prise et ses images.
+
 ## Essayer sans souris
 
 `MONTEUR2_SCENARIO="ouvrir 0; aller 20; capture /tmp/a.png; lire; attendre 3; dire; preparer;

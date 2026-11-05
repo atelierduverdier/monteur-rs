@@ -146,3 +146,76 @@ mod tests {
         assert_eq!(nom_lisible("2026-13-31 07-05-00"), "2026-13-31 07-05-00");
     }
 }
+
+/// La bande d'images de la prise, pour la piste Vidéos : une image toutes les 2 s au plus, rangées
+/// en grille (une seule ligne dépasserait la taille permise d'une texture).
+pub struct Bande {
+    recu: Option<Receiver<Option<tiny_skia::Pixmap>>>,
+    texture: Option<Texture>,
+    pub colonnes: u32,
+    pub rangees: u32,
+    pub nombre: u32,
+}
+
+impl Bande {
+    pub fn vide() -> Self {
+        Self { recu: None, texture: None, colonnes: 1, rangees: 1, nombre: 0 }
+    }
+
+    pub fn lancer(video: PathBuf, duree: f64) -> Self {
+        let nombre = (duree / 2.0).clamp(8.0, 160.0) as u32;
+        let colonnes = nombre.min(16);
+        let rangees = nombre.div_ceil(colonnes);
+        let ips = (nombre as f64 / duree.max(0.1)).max(1e-3);
+        let (envoi, recu) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Les images clés suffisent : une bande n'a pas besoin de l'instant exact.
+            let sortie = Command::new("ffmpeg")
+                .args(["-v", "error", "-skip_frame", "nokey", "-i"])
+                .arg(&video)
+                .args(["-vf", &format!("fps={ips:.6},scale=-2:54,tile={colonnes}x{rangees}"), "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
+                .output()
+                .ok();
+            let _ = envoi.send(sortie.and_then(|s| tiny_skia::Pixmap::decode_png(&s.stdout).ok()));
+        });
+        Self { recu: Some(recu), texture: None, colonnes, rangees, nombre }
+    }
+
+    pub fn liberer(&mut self, gpu: &mut GpuApi<'_>) {
+        if let Some(t) = self.texture.take() {
+            let _ = gpu.unregister_external_texture(t.poignee);
+        }
+    }
+
+    pub fn preparer(&mut self, gpu: &mut GpuApi<'_>) -> Option<dear_imgui_rs::TextureId> {
+        if let Some(r) = &self.recu
+            && let Ok(p) = r.try_recv()
+        {
+            self.recu = None;
+            if let Some(p) = p {
+                let taille = wgpu::Extent3d { width: p.width(), height: p.height(), depth_or_array_layers: 1 };
+                let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+                    label: Some("bande"),
+                    size: taille,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                gpu.queue().write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    p.data(),
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(p.width() * 4), rows_per_image: Some(p.height()) },
+                    taille,
+                );
+                let vue = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                if let Ok(poignee) = gpu.register_external_texture(&vue) {
+                    self.texture = Some(Texture { _texture: texture, _vue: vue, poignee });
+                }
+            }
+        }
+        self.texture.as_ref().and_then(|t| gpu.resolve_external_texture(t.poignee).ok())
+    }
+}

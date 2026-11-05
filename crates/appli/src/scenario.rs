@@ -2,7 +2,7 @@
 //! dehors) : `MONTEUR2_SCENARIO="ouvrir 0; aller 26.7; attendre 1; capture /tmp/x.png; quitter"`.
 //! Étapes : `ouvrir <rang>`, `aller <s>`, `lire`, `arreter`, `attendre <s>`, `choisir zoom|etiquette|
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
-//! `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `nouveau <nom>`, `enregistrer`, `filmer`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -103,6 +103,14 @@ impl Scenario {
                         m.vignette.enregistrer(f);
                     }
                 }
+                "enregistrer" => m.enregistrer(),
+                "filmer" => m.filmer(),
+                "liste" => println!("  {} prise(s) dans la liste", m.dossier.prises.len()),
+                "nouveau" => m.nouveau_projet(&mots[1..].join(" ")),
+                "marquer" => m.prise.iter_mut().for_each(|p| {
+                    let t = p.lecteur.position();
+                    let _ = p.marquer_coupe(t);
+                }),
                 "stop" => m.prise.iter_mut().for_each(|p| p.lecteur.stop()),
                 "couper" => m.prise.iter_mut().for_each(|p| p.ajouter_coupe(nombre(1), nombre(2))),
                 "defaire" => m.prise.iter_mut().for_each(|p| p.defaire()),

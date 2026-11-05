@@ -7,6 +7,7 @@ use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
 use noyau::montage::{Clic, Coupe, Etiquette, Montage, SousTitre, Zoom};
 
 use crate::etat::{Choix, PICS_PAR_S, Prise, Sorte, temps};
+use crate::miniatures::Bande;
 
 const ENTETE: f32 = 120.0;
 const REGLE: f32 = 22.0;
@@ -38,7 +39,7 @@ struct Piste {
 }
 
 const PISTES: [Piste; 7] = [
-    Piste { nom: "Vidéos", sorte: Some(Sorte::Insertion), couleur: charte::PISTE_VIDEO, hauteur: 26.0 },
+    Piste { nom: "Vidéos", sorte: Some(Sorte::Insertion), couleur: charte::PISTE_VIDEO, hauteur: 46.0 },
     Piste { nom: "Zooms", sorte: Some(Sorte::Zoom), couleur: charte::PISTE_ZOOM, hauteur: 26.0 },
     Piste { nom: "Étiquettes", sorte: Some(Sorte::Etiquette), couleur: charte::PISTE_ETIQUETTE, hauteur: 26.0 },
     Piste { nom: "Clics", sorte: Some(Sorte::Clic), couleur: charte::TEXT_2, hauteur: 18.0 },
@@ -151,6 +152,29 @@ fn retrouver(m: &mut Montage, c: Choix) -> Choix {
     Choix { sorte: c.sorte, indice }
 }
 
+/// Des hachures « / » dans un rectangle, tous les 10 pixels (fixes à l'écran : elles ne glissent
+/// pas quand le rectangle grandit).
+fn hachurer(dl: &dear_imgui_rs::DrawListMut<'_>, x0: f32, y0: f32, x1: f32, y1: f32, couleur: [f32; 4]) {
+    let h = y1 - y0;
+    let mut s = ((x0 - h) / 10.0).floor() * 10.0;
+    while s < x1 {
+        // Le trait va de (s, y1) à (s + h, y0), borné au rectangle.
+        let (mut ax, mut ay, mut bx, mut by) = (s, y1, s + h, y0);
+        if ax < x0 {
+            ay -= x0 - ax;
+            ax = x0;
+        }
+        if bx > x1 {
+            by += bx - x1;
+            bx = x1;
+        }
+        if ax < bx {
+            dl.add_line([ax, ay], [bx, by], couleur).build();
+        }
+        s += 10.0;
+    }
+}
+
 impl Ligne {
     pub fn new() -> Self {
         Self { debut: 0.0, par_px: 0.05, duree_vue: -1.0, prise_main: None }
@@ -164,7 +188,7 @@ impl Ligne {
         self.debut + (x - x0) as f64 * self.par_px
     }
 
-    pub fn dessiner(&mut self, ui: &Ui, prise: &mut Prise) {
+    pub fn dessiner(&mut self, ui: &Ui, prise: &mut Prise, bande: (&Bande, Option<dear_imgui_rs::TextureId>)) {
         let dispo = ui.content_region_avail();
         let origine = ui.cursor_screen_pos();
         let largeur = (dispo[0] - ENTETE).max(50.0);
@@ -204,10 +228,13 @@ impl Ligne {
         }
 
         // Les pistes.
+        // Les pistes remplissent le panneau : le tirer vers le haut les agrandit (jusqu'au double).
+        let total: f32 = PISTES.iter().map(|p| p.hauteur).sum();
+        let k = ((dispo[1] - REGLE) / total).clamp(1.0, 2.0);
         let mut y = origine[1] + REGLE;
         let mut rangees = Vec::new();
         for piste in &PISTES {
-            let h = piste.hauteur;
+            let h = piste.hauteur * k;
             dl.add_rect([x0, y], [x1, y + h - 1.0], [0.102, 0.102, 0.102, 1.0]).filled(true).build();
             dl.add_rect([origine[0] + 8.0, y + h / 2.0 - 4.0], [origine[0] + 16.0, y + h / 2.0 + 4.0], c(piste.couleur))
                 .filled(true)
@@ -219,11 +246,48 @@ impl Ligne {
         }
         let bas = y;
 
-        // Les passages coupés assombrissent toutes les pistes.
-        for (a, b) in prise.montage.coupes_actives() {
-            let (xa, xb) = (self.x_de(a, x0).max(x0), self.x_de(b, x0).min(x1));
-            if xb > xa {
-                dl.add_rect([xa, origine[1] + REGLE], [xb, bas], charte::vec(0x000000, 0.35)).filled(true).build();
+        // La barre de la prise, sur la piste Vidéos : ses images, du début à la fin.
+        if let Some(&(yb, hb, _)) = rangees.iter().find(|r| r.2.sorte == Some(Sorte::Insertion)) {
+            let (ax, bx) = (self.x_de(0.0, x0).max(x0), self.x_de(duree, x0).min(x1));
+            dl.add_rect([ax, yb + 2.0], [bx, yb + hb - 3.0], c(charte::BG_CARD)).filled(true).rounding(3.0).build();
+            if let (Some(id), true) = (bande.1, bande.0.nombre > 0) {
+                let b = bande.0;
+                let hauteur = hb - 5.0;
+                let largeur_image = hauteur * 1.6;
+                let mut x = ax;
+                while x < bx {
+                    let t = self.t_de(x + largeur_image / 2.0, x0).clamp(0.0, duree);
+                    let n = ((t / duree * b.nombre as f64) as u32).min(b.nombre - 1);
+                    let (col, rang) = ((n % b.colonnes) as f32, (n / b.colonnes) as f32);
+                    let (cl, rl) = (b.colonnes as f32, b.rangees as f32);
+                    let vu = ((bx - x) / largeur_image).min(1.0);
+                    dl.add_image(
+                        id,
+                        [x, yb + 2.0],
+                        [x + largeur_image * vu, yb + 2.0 + hauteur],
+                        [col / cl, rang / rl],
+                        [(col + vu) / cl, (rang + 1.0) / rl],
+                        [1.0, 1.0, 1.0, 0.8],
+                    );
+                    x += largeur_image;
+                }
+            }
+            dl.add_rect([ax, yb + 2.0], [bx, yb + hb - 3.0], c(charte::TEXT_2)).rounding(3.0).build();
+        }
+
+        // Les passages coupés se voient sur toutes les pistes : un voile et des hachures ; un passage
+        // accéléré, juste un voile léger (il reste dans la vidéo).
+        let haut_pistes = origine[1] + REGLE;
+        for coupe in prise.montage.coupes.iter().filter(|c| c.active) {
+            let (xa, xb) = (self.x_de(coupe.debut, x0).max(x0), self.x_de(coupe.fin, x0).min(x1));
+            if xb <= xa {
+                continue;
+            }
+            if coupe.vitesse > 1.0 {
+                dl.add_rect([xa, haut_pistes], [xb, bas], charte::vec(charte::ALERTE, 0.08)).filled(true).build();
+            } else {
+                dl.add_rect([xa, haut_pistes], [xb, bas], charte::vec(charte::PISTE_COUPE, 0.18)).filled(true).build();
+                hachurer(&dl, xa, haut_pistes, xb, bas, charte::vec(charte::PISTE_COUPE, 0.35));
             }
         }
 
@@ -273,13 +337,14 @@ impl Ligne {
                 let choisi = prise.choix == Some(ch);
                 let proposee = sorte == Sorte::Coupe && !prise.montage.coupes[indice].active;
                 let couleur = if sorte == Sorte::Coupe && prise.montage.coupes[indice].vitesse > 1.0 { charte::ALERTE } else { piste.couleur };
-                let fond = if choisi { 0.85 } else if proposee { 0.08 } else { 0.25 };
+                let fond: f32 = if choisi { 0.85 } else if proposee { 0.08 } else { 0.25 };
+                let fond = if sorte == Sorte::Insertion { fond.max(0.75) } else { fond };
                 dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], charte::vec(couleur, fond)).filled(true).rounding(3.0).build();
                 dl.add_rect([xa, yp + 3.0], [xb, yp + hp - 4.0], c(couleur)).rounding(3.0).thickness(if choisi { 2.0 } else { 1.0 }).build();
                 let texte = libelle(&prise.montage, ch);
                 if !texte.is_empty() && xb - xa > 24.0 {
                     let visible: String = texte.chars().take(((xb - xa - 8.0) / 7.0) as usize).collect();
-                    let encre = if choisi { charte::ENCRE_SUR_ACCENT } else { charte::TEXT };
+                    let encre = if choisi || sorte == Sorte::Insertion { charte::ENCRE_SUR_ACCENT } else { charte::TEXT };
                     dl.add_text([xa + 4.0, yp + hp / 2.0 - 8.0], c(encre), visible);
                 }
                 if souris[1] >= yp && souris[1] < yp + hp && souris[0] >= xa - BORD && souris[0] <= xb + BORD {
@@ -293,9 +358,14 @@ impl Ligne {
         }
 
         // Le début d'une coupe posée par C.
+        // Elle grandit jusqu'à la tête de lecture, dans un sens ou dans l'autre, comme au Monteur 1.
         if let Some(a) = prise.coupe_commencee {
-            let xa = self.x_de(a, x0);
-            dl.add_line([xa, origine[1]], [xa, bas], c(charte::PISTE_COUPE)).thickness(2.0).build();
+            let (d, f) = (a.min(tete), a.max(tete));
+            let (xa, xb) = (self.x_de(d, x0).max(x0), self.x_de(f, x0).min(x1).max(self.x_de(d, x0).max(x0) + 2.0));
+            dl.add_rect([xa, haut_pistes], [xb, bas], charte::vec(charte::PISTE_COUPE, 0.24)).filled(true).build();
+            hachurer(&dl, xa, haut_pistes, xb, bas, charte::vec(charte::PISTE_COUPE, 0.6));
+            let xd = self.x_de(a, x0);
+            dl.add_line([xd, origine[1]], [xd, bas], c(charte::PISTE_COUPE)).thickness(2.0).build();
         }
 
         // La souris.
