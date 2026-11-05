@@ -157,6 +157,9 @@ fn texte_trop_long_mesure() {
     let polices = Polices::charger();
     let mut f = machine();
     f.titre = "MACHINE À COMMANDE".into();
+    // En automatique il se réduit ; une taille choisie est respectée, et le débordement se dit.
+    assert!(vignette::debordements(&f, &polices).is_empty());
+    f.corps_titre = 112.0;
     let trop = vignette::debordements(&f, &polices);
     assert_eq!(trop.len(), 1);
     assert_eq!(trop[0].0, "titre");

@@ -65,13 +65,25 @@ fn plein((r, g, b): (u8, u8, u8), anticrenele: bool) -> Paint<'static> {
     p
 }
 
+/// Le corps d'un texte. Le titre : celui choisi, sinon 112 réduit juste assez pour tenir.
+pub fn corps_de(fiche: &Fiche, champ: &str, s: &Style, polices: &Polices) -> f32 {
+    if champ != "titre" {
+        return s.corps;
+    }
+    if fiche.corps_titre > 0.0 {
+        return fiche.corps_titre as f32;
+    }
+    let large = polices.de(s.gras).avance(&fiche.titre, s.corps);
+    if large <= s.largeur_max() as f32 { s.corps } else { (s.corps * s.largeur_max() as f32 / large).floor() }
+}
+
 /// La largeur en pixels de chaque texte (0 s'il est vide).
 pub fn largeurs(fiche: &Fiche, polices: &Polices) -> Vec<(&'static str, f32)> {
     STYLES
         .iter()
         .map(|(champ, s)| {
             let t = texte_de(fiche, champ);
-            (*champ, if t.trim().is_empty() { 0.0 } else { polices.de(s.gras).avance(t, s.corps) })
+            (*champ, if t.trim().is_empty() { 0.0 } else { polices.de(s.gras).avance(t, corps_de(fiche, champ, s, polices)) })
         })
         .collect()
 }
@@ -122,8 +134,29 @@ pub fn vignette(fiche: &Fiche, image: Option<PixmapRef>, cadre: Option<[i64; 4]>
         }
         let t = texte_de(fiche, champ);
         if !t.trim().is_empty() {
-            texte(&mut v, t, s.gras, s.corps, s.couleur, s.x, s.y);
+            texte(&mut v, t, s.gras, corps_de(fiche, champ, &s, polices), s.couleur, s.x, s.y);
         }
     }
     v
+}
+
+#[cfg(test)]
+mod tests_titre {
+    use super::*;
+
+    #[test]
+    fn titre_qui_tient() {
+        let p = Polices::charger();
+        let titre = STYLES[0].1;
+        let f = Fiche { titre: "FILETAGE".into(), ..Fiche::default() };
+        assert_eq!(corps_de(&f, "titre", &titre, &p), 112.0);
+        // Le titre de la remarque du 05/11 : 141 pixels de trop à 112.
+        let mut f = Fiche { titre: "Dégagement".into(), ..Fiche::default() };
+        let auto = corps_de(&f, "titre", &titre, &p);
+        assert!(auto < 112.0 && debordements(&f, &p).is_empty(), "{auto}");
+        // Choisi à la main, il est respecté, et le débordement se signale.
+        f.corps_titre = 130.0;
+        assert_eq!(corps_de(&f, "titre", &titre, &p), 130.0);
+        assert!(!debordements(&f, &p).is_empty());
+    }
 }

@@ -25,6 +25,9 @@ pub struct Fiche {
     /// x, y, largeur, hauteur en pixels de la vidéo. Les nombres restent tels qu'écrits (entiers
     /// le plus souvent) : le Monteur 1 relit ce fichier.
     pub cadre: Option<Vec<Number>>,
+    /// La taille choisie pour le titre de la vignette ; 0 : automatique, il tient dans le bandeau.
+    #[serde(skip_serializing_if = "est_nul")]
+    pub corps_titre: f64,
     /// Pas une vidéo pour YouTube.
     pub ignoree: bool,
     /// Date (st_mtime_ns) de la vignette que le Monteur a posée.
@@ -33,6 +36,10 @@ pub struct Fiche {
     pub envoyee_le: String,
     #[serde(flatten)]
     pub autres: Map<String, Value>,
+}
+
+fn est_nul(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Fiche {
@@ -54,6 +61,9 @@ impl Fiche {
         texte("envoyee_le", &mut f.envoyee_le);
         if let Some(Value::Number(n)) = d.remove("temps") {
             f.temps = n.as_f64().unwrap_or(0.0);
+        }
+        if let Some(Value::Number(n)) = d.remove("corps_titre") {
+            f.corps_titre = n.as_f64().unwrap_or(0.0);
         }
         if let Some(Value::Array(c)) = d.remove("cadre")
             && c.len() == 4

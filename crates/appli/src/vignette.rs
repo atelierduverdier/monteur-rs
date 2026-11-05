@@ -192,18 +192,40 @@ impl Vignette {
             }
             ui.separator();
             let l = ui.push_item_width(-1.0);
-            let mut champ = |ui: &Ui, nom: &str, id: &str, valeur: &mut String| {
+            let champ = |ui: &Ui, nom: &str, id: &str, valeur: &mut String| {
                 ui.text(nom);
-                if ui.input_text(id, valeur).build() {
-                    change = true;
-                    self.sale = true;
-                }
+                ui.input_text(id, valeur).build()
             };
-            champ(ui, "Titre", "##titre", &mut fiche.titre);
-            champ(ui, "Sous-titre", "##sous_titre", &mut fiche.sous_titre);
-            champ(ui, "Ligne 1", "##ligne1", &mut fiche.ligne1);
-            champ(ui, "Ligne 2", "##ligne2", &mut fiche.ligne2);
-            champ(ui, "Ligne 3", "##ligne3", &mut fiche.ligne3);
+            let mut touche = champ(ui, "Titre", "##titre", &mut fiche.titre);
+            let mut corps = vignette::corps_de(fiche, "titre", &vignette::STYLES[0].1, polices);
+            ui.set_next_item_width(ui.content_region_avail()[0] - 60.0);
+            let taille = dear_imgui_rs::NumericFormat::<f32>::new("Taille %.0f".to_string());
+            let bouge = match taille {
+                Ok(f) => ui.slider_config("##corps", 40.0, 140.0).display_format(f).build(&mut corps),
+                Err(_) => ui.slider_f32("##corps", &mut corps, 40.0, 140.0),
+            };
+            if bouge {
+                fiche.corps_titre = corps.round() as f64;
+                change = true;
+                self.sale = true;
+            }
+            ui.same_line();
+            if ui.button("Auto") && fiche.corps_titre != 0.0 {
+                fiche.corps_titre = 0.0;
+                change = true;
+                self.sale = true;
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("La plus grande taille qui tient dans le bandeau.");
+            }
+            touche |= champ(ui, "Sous-titre", "##sous_titre", &mut fiche.sous_titre);
+            touche |= champ(ui, "Ligne 1", "##ligne1", &mut fiche.ligne1);
+            touche |= champ(ui, "Ligne 2", "##ligne2", &mut fiche.ligne2);
+            touche |= champ(ui, "Ligne 3", "##ligne3", &mut fiche.ligne3);
+            if touche {
+                change = true;
+                self.sale = true;
+            }
             drop(l);
             for (champ, trop) in vignette::debordements(fiche, polices) {
                 ui.text_colored(charte::c(charte::ERREUR), format!("{champ} : {trop} pixels de trop, il mord sur l'image"));
