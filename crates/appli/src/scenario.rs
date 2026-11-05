@@ -4,7 +4,7 @@
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
 //! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
 //! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
-//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `filmer_simple`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
 //! `quitter`.
 
@@ -184,6 +184,7 @@ impl Scenario {
                 }
                 "filmer" => m.filmer(),
                 "filmer_ecran" => m.filmer_ecran(),
+                "filmer_simple" => m.filmer_simple(),
                 "couper_phrase" => m.prise.iter_mut().for_each(|p| println!("  {}", p.basculer_phrase(nombre(1) as usize))),
                 "niveau" => {
                     if let Some(c) = &m.capture {

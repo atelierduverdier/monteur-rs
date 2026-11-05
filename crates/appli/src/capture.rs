@@ -28,6 +28,7 @@ pub struct Capture {
     /// La pause du décompte : son début, et ce qu'elle a duré une fois finie.
     decompte: Option<Instant>,
     decale: f64,
+    avec_decompte: bool,
     partiel: PathBuf,
     dossier: PathBuf,
     debut: Option<Instant>,
@@ -157,7 +158,8 @@ fn meler_le_son(brut: &Path, sortie: &Path) -> Result<(), String> {
 
 impl Capture {
     /// `jeton` : où le portail garde la fenêtre choisie, pour ne pas la redemander.
-    pub fn lancer(dossier: &Path, jeton: &Path) -> Result<Self, String> {
+    /// `avec_decompte` : les trois bips avant de filmer.
+    pub fn lancer(dossier: &Path, jeton: &Path, avec_decompte: bool) -> Result<Self, String> {
         let programme = std::env::var_os("MONTEUR2_ECRAN").unwrap_or_else(|| "gpu-screen-recorder".into());
         let partiel = dossier.join(format!("capture {}.partiel.mp4", noyau::maintenant().replace([':', '/'], "-")));
         let mut enfant = Command::new(&programme)
@@ -187,7 +189,7 @@ impl Capture {
                 }
             });
         }
-        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: Micro::lancer(), decompte: None, decale: 0.0, debut: None, duree: None, stoppee: false, fini: false, derniere_ligne, travail: None })
+        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: Micro::lancer(), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, fini: false, derniere_ligne, travail: None })
     }
 
     /// Les secondes filmées ; `None` tant que la fenêtre n'est pas choisie.
@@ -231,7 +233,10 @@ impl Capture {
         if let Some((recu, _)) = &self.travail {
             return recu.try_recv().ok();
         }
-        if self.decompte.is_none() && !self.stoppee && horodatage_du(&self.partiel).exists() {
+        if !self.avec_decompte && self.debut.is_none() && !self.stoppee && horodatage_du(&self.partiel).exists() {
+            self.debut = Some(Instant::now());
+        }
+        if self.avec_decompte && self.decompte.is_none() && !self.stoppee && horodatage_du(&self.partiel).exists() {
             signal(&self.enfant, "-USR2");
             self.decompte = Some(Instant::now());
             std::thread::spawn(|| {

@@ -222,6 +222,8 @@ struct Monteur {
     /// La prise dont on demande la mise à la corbeille, en attente de confirmation.
     a_jeter: Option<PathBuf>,
     ouvrir_corbeille: bool,
+    /// Un enregistrement simple : il finit dans Copies d'écran, sans toucher au travail en cours.
+    capture_simple: bool,
     /// La prise tout juste filmée : Préparer se lance dès qu'elle est ouverte.
     a_preparer: Option<PathBuf>,
     /// Le panneau Texte : ce qu'on y cherche, et la phrase que la lecture y a amenée.
@@ -339,6 +341,7 @@ impl Monteur {
             capture: None,
             capture_prevue: None,
             raccourci: None,
+            capture_simple: false,
             a_jeter: None,
             ouvrir_corbeille: false,
             a_preparer: None,
@@ -713,12 +716,24 @@ impl Monteur {
 
     /// Lance l'enregistrement de l'écran, dans le dossier affiché.
     fn filmer_ecran(&mut self) {
+        self.lancer_capture(false);
+    }
+
+    /// Une vidéo vite faite, pour montrer un bug : toujours dans Copies d'écran, sans décompte, et le
+    /// projet ouvert n'en sait rien.
+    fn filmer_simple(&mut self) {
+        self.lancer_capture(true);
+    }
+
+    fn lancer_capture(&mut self, simple: bool) {
         if self.capture.is_some() {
             return;
         }
-        match capture::Capture::lancer(&self.dossier.chemin, &chemin_jeton_portail()) {
+        let dossier = if simple { self.copies.clone() } else { self.dossier.chemin.clone() };
+        match capture::Capture::lancer(&dossier, &chemin_jeton_portail(), !simple) {
             Ok(c) => {
                 self.capture = Some(c);
+                self.capture_simple = simple;
                 self.message = "Choisis la fenêtre à filmer.".into();
                 self.raccourci.get_or_insert_with(raccourci::lancer);
             }
@@ -742,6 +757,12 @@ impl Monteur {
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
         self.message = match fin {
+            capture::Fin::Prise(p) if self.capture_simple => {
+                if self.dossier.chemin == self.copies {
+                    self.a_changer = Some(self.copies.clone());
+                }
+                format!("Vidéo enregistrée : {} ({}).", p.display(), chrono_court(duree))
+            }
             capture::Fin::Prise(p) => {
                 self.a_changer = Some(self.dossier.chemin.clone());
                 let message = format!("Prise enregistrée : {} ({}). Préparation en cours.", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree));
@@ -1034,6 +1055,11 @@ impl Monteur {
             if outil(ui, "##filmer", Icone::Filmer, "Filmer", charte::ERREUR, Allure::Simple, "Filme une fenêtre, sans OBS. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer.") {
                 self.capture_prevue = None;
                 self.filmer_ecran();
+            }
+            ui.same_line();
+            if outil(ui, "##simple", Icone::Filmer, "Enregistrement simple", charte::ALERTE, Allure::Simple, "Toujours dans Copies d'écran, sans décompte ni préparation : le projet ouvert ne bouge pas.") {
+                self.capture_prevue = None;
+                self.filmer_simple();
             }
             ui.same_line();
             if outil(ui, "##verdier", Icone::Verdier, "Filmer VerdierCAM", t, Allure::Simple, "Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.") {
