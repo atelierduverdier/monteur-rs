@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Monteur 2
+GenericName=Montage vidéo
+Comment=Filmer, monter et envoyer une vidéo
+Exec=@EXEC@ %f
+Icon=monteur
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=youtube;vignette;vidéo;montage;verdiercam;capture;
+StartupNotify=true

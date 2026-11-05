@@ -124,7 +124,7 @@ fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon]) -> Vec<String> {
+pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], volume: Option<&str>) -> Vec<String> {
     let mut cmd = vec![
         s("ffmpeg"), s("-v"), s("error"), s("-y"), s("-nostats"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgba"),
         s("-s"), format!("{l}x{h}"), s("-r"), s(ips), s("-i"), s("-"),
@@ -134,7 +134,11 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
         for c in clips.iter().filter(|c| c.son) {
             cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
         }
-        cmd.extend([s("-filter_complex"), graphe_son(retire, clips), s("-map"), s("0:v"), s("-map"), s("[a]")]);
+        let (graphe, sortie_son) = match volume {
+            Some(v) => (format!("{};[a]{v}[fort]", graphe_son(retire, clips)), "[fort]"),
+            None => (graphe_son(retire, clips), "[a]"),
+        };
+        cmd.extend([s("-filter_complex"), graphe, s("-map"), s("0:v"), s("-map"), s(sortie_son)]);
         cmd.extend([s("-c:a"), s("aac"), s("-b:a"), s("192k"), s("-shortest")]);
     } else {
         cmd.extend([s("-map"), s("0:v")]);
@@ -142,6 +146,36 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
     cmd.extend(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart"].map(String::from));
     cmd.push(sortie.to_string_lossy().into_owned());
     cmd
+}
+
+/// Volume visé : −14 LUFS, la référence de YouTube ; crêtes à −1 dB.
+const VOLUME: &str = "I=-14:TP=-1:LRA=11";
+
+/// Mesure le son monté (premier passage de `loudnorm`) et rend le filtre qui l'amène au volume
+/// visé. `None` : rien à mesurer, ou un silence.
+fn filtre_volume(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon]) -> Option<String> {
+    let mut cmd = vec![s("-hide_banner"), s("-nostats"), s("-f"), s("lavfi"), s("-i"), s("nullsrc=s=2x2:d=0.04"), s("-i"), video.to_string_lossy().into_owned()];
+    for c in clips.iter().filter(|c| c.son) {
+        cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
+    }
+    let graphe = format!("{};[a]loudnorm={VOLUME}:print_format=json[mesure]", graphe_son(retire, clips));
+    cmd.extend([s("-filter_complex"), graphe, s("-map"), s("[mesure]"), s("-f"), s("null"), s("-")]);
+    let sortie = Command::new("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok()?;
+    filtre_depuis_mesure(&String::from_utf8_lossy(&sortie.stderr))
+}
+
+/// Le bloc JSON que `loudnorm` écrit en fin de sortie d'erreur, repris dans le second passage.
+fn filtre_depuis_mesure(journal: &str) -> Option<String> {
+    let bloc = &journal[journal.rfind('{')?..=journal.rfind('}')?];
+    let m: serde_json::Value = serde_json::from_str(bloc).ok()?;
+    let champ = |n: &str| m.get(n)?.as_str()?.parse::<f64>().ok().filter(|v| v.is_finite());
+    let (i, tp, lra, seuil, ecart) = (champ("input_i")?, champ("input_tp")?, champ("input_lra")?, champ("input_thresh")?, champ("target_offset")?);
+    if i < -60.0 {
+        return None;
+    }
+    Some(format!(
+        "loudnorm={VOLUME}:measured_I={i}:measured_TP={tp}:measured_LRA={lra}:measured_thresh={seuil}:offset={ecart}:linear=true,aresample=48000"
+    ))
 }
 
 fn lancer(cmd: &[String], entree: bool) -> Result<Child, Erreur> {
@@ -337,7 +371,8 @@ pub fn rendre(video: &Path, montage: &Montage, sortie: &Path, suivi: &Suivi) -> 
             return Err(Erreur(format!("Vidéo insérée introuvable : {}", i.video)));
         }
     }
-    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, infos.son, &clips), true)?;
+    let volume = if infos.son && montage.reglages.volume_egal { filtre_volume(video, &retire, &clips) } else { None };
+    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, infos.son, &clips, volume.as_deref()), true)?;
     let mut entree = encodeur.stdin.take().expect("entrée de l'encodeur");
     let erreurs = encodeur.stderr.take();
     // Lue à part : ffmpeg bloquerait s'il remplissait sa sortie d'erreur.
@@ -481,4 +516,19 @@ pub fn sonder(video: &Path) -> Result<Infos, Erreur> {
     let cmd = videos::commande_sonder(video);
     let sortie = Command::new(&cmd[0]).args(&cmd[1..]).output().map_err(|e| Erreur(format!("ffprobe : {e}")))?;
     videos::lire_infos(&String::from_utf8_lossy(&sortie.stdout))
+}
+
+#[cfg(test)]
+mod tests_volume {
+    use super::*;
+
+    #[test]
+    fn mesure_lue_ou_ecartee() {
+        let bloc = |i: &str| format!("[Parsed_loudnorm_0 @ 0x1]\n{{\n\t\"input_i\" : \"{i}\",\n\t\"input_tp\" : \"-9.40\",\n\t\"input_lra\" : \"7.40\",\n\t\"input_thresh\" : \"-41.00\",\n\t\"target_offset\" : \"0.20\"\n}}\n");
+        let f = filtre_depuis_mesure(&bloc("-30.90")).unwrap();
+        assert!(f.contains("measured_I=-30.9:measured_TP=-9.4") && f.ends_with("aresample=48000"), "{f}");
+        assert_eq!(filtre_depuis_mesure(&bloc("-inf")), None);
+        assert_eq!(filtre_depuis_mesure(&bloc("-70.00")), None);
+        assert_eq!(filtre_depuis_mesure("rien"), None);
+    }
 }

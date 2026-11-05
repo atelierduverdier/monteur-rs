@@ -7,6 +7,7 @@ license.workspace = true
 description = "Rendre le montage : un ffmpeg décode, le composeur peint sur tous les cœurs, un ffmpeg encode"
 
 [dependencies]
+serde_json = "1"
 noyau = { path = "../noyau" }
 composeur = { path = "../composeur" }
 tiny-skia = "0.11"

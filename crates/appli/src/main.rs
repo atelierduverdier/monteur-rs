@@ -8,6 +8,7 @@ mod capture;
 mod etat;
 mod ligne;
 mod miniatures;
+mod raccourci;
 mod scenario;
 mod vignette;
 mod vue;
@@ -38,6 +39,7 @@ struct Panneaux {
     ligne: WindowKey,
     vignette: WindowKey,
     youtube: WindowKey,
+    texte: WindowKey,
 }
 
 impl Panneaux {
@@ -50,6 +52,7 @@ impl Panneaux {
             ligne: cle("ligne", "Ligne de temps"),
             vignette: cle("vignette", "Vignette"),
             youtube: cle("youtube", "YouTube"),
+            texte: cle("texte", "Texte"),
         }
     }
 
@@ -62,7 +65,7 @@ impl Panneaux {
                 DockSplit::Left,
                 0.17,
                 DockLayout::tabs([&self.prises]),
-                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.inspecteur]), DockLayout::tabs([&self.visionneuse, &self.vignette, &self.youtube])),
+                DockLayout::split(DockSplit::Right, 0.24, DockLayout::tabs([&self.texte, &self.inspecteur]), DockLayout::tabs([&self.visionneuse, &self.vignette, &self.youtube])),
             ),
         )
     }
@@ -192,9 +195,17 @@ struct Monteur {
     capture: Option<capture::Capture>,
     /// Filmer VerdierCAM : l'enregistrement attend que sa fenêtre soit ouverte.
     capture_prevue: Option<std::time::Instant>,
+    /// Le raccourci global, demandé au premier enregistrement.
+    raccourci: Option<Receiver<raccourci::Evenement>>,
+    /// La prise tout juste filmée : Préparer se lance dès qu'elle est ouverte.
+    a_preparer: Option<PathBuf>,
+    /// Le panneau Texte : ce qu'on y cherche, et la phrase que la lecture y a amenée.
+    cherche: String,
+    phrase_suivie: Option<usize>,
     youtube: youtube::Youtube,
     /// Pour les essais : passer sur l'onglet YouTube.
     montrer_youtube: bool,
+    montrer_texte: bool,
     envoi: Option<youtube::Envoi>,
     /// Quand on a regardé le dossier pour la dernière fois.
     regarde: std::time::Instant,
@@ -220,6 +231,23 @@ const DELAI_VERDIERCAM: std::time::Duration = std::time::Duration::from_secs(4);
 
 fn chemin_jeton_portail() -> PathBuf {
     chemin_fiches().with_file_name("portail-capture")
+}
+
+/// Le niveau du micro : vert, orange près de saturer, rouge saturé.
+fn vu_metre(ui: &Ui, db: f32, muet: bool) {
+    let (a, b) = (ui.cursor_screen_pos(), [ui.cursor_screen_pos()[0] + 110.0, ui.cursor_screen_pos()[1] + 30.0]);
+    ui.dummy([110.0, 30.0]);
+    let (haut, bas) = (a[1] + 10.0, b[1] - 10.0);
+    let dl = ui.get_window_draw_list();
+    dl.add_rect([a[0], haut], [b[0], bas], charte::c(charte::BG_INPUT)).filled(true).rounding(2.0).build();
+    let part = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    let couleur = if db > -1.0 { charte::ERREUR } else if db > -6.0 { charte::ALERTE } else { charte::SUCCES };
+    dl.add_rect([a[0], haut], [a[0] + 110.0 * part, bas], charte::c(couleur)).filled(true).rounding(2.0).build();
+    if muet {
+        ui.same_line();
+        ui.align_text_to_frame_padding();
+        ui.text_colored(charte::c(charte::ALERTE), "Micro muet ?");
+    }
 }
 
 fn chrono_court(s: f64) -> String {
@@ -276,8 +304,13 @@ impl Monteur {
             rendu: None,
             capture: None,
             capture_prevue: None,
+            raccourci: None,
+            a_preparer: None,
+            cherche: String::new(),
+            phrase_suivie: None,
             youtube: youtube::Youtube::new(),
             montrer_youtube: false,
+            montrer_texte: false,
             envoi: None,
             regarde: std::time::Instant::now(),
             prise_choisie: None,
@@ -447,6 +480,58 @@ impl Monteur {
         };
     }
 
+    /// Le texte de la prise : un clic va à la phrase, « Couper » la retire du montage.
+    fn panneau_texte(&mut self, ui: &Ui) {
+        let Some(p) = &mut self.prise else {
+            ui.text_colored(charte::c(charte::TEXT_2), "Choisir une prise à gauche.");
+            return;
+        };
+        if p.montage.sous_titres.is_empty() {
+            ui.text_wrapped("Pas encore de texte : Préparer le montage écoute la voix et l'écrit ici.");
+            return;
+        }
+        ui.set_next_item_width(-1.0);
+        ui.input_text("##cherche", &mut self.cherche).hint("Chercher dans le texte…").build();
+        let cherche = self.cherche.to_lowercase();
+        let t = p.lecteur.position();
+        let lecture = p.lecteur.en_lecture();
+        let mut aller = None;
+        let mut basculer = None;
+        ui.child_window("phrases").build(ui, || {
+            for (i, s) in p.montage.sous_titres.iter().enumerate() {
+                if !cherche.is_empty() && !s.texte.to_lowercase().contains(&cherche) {
+                    continue;
+                }
+                let coupee = p.montage.dans_une_coupe((s.debut + s.fin) / 2.0);
+                let courante = s.debut <= t && t < s.fin;
+                if courante && lecture && self.phrase_suivie != Some(i) {
+                    self.phrase_suivie = Some(i);
+                    ui.set_scroll_here_y(0.5);
+                }
+                let _id = ui.push_id(i as i32);
+                if ui.small_button(if coupee { "Rétablir" } else { "Couper" }) {
+                    basculer = Some(i);
+                }
+                ui.same_line();
+                let couleur = if coupee { charte::TEXT_DISABLED } else if courante { charte::CHIFFRE_SAISIE } else { charte::TEXT };
+                let _encre = ui.push_style_color(StyleColor::Text, charte::c(couleur));
+                ui.text_wrapped(format!("{}  {}", etat::temps(s.debut), s.texte));
+                if ui.is_item_hovered() {
+                    ui.get_window_draw_list().add_rect(ui.item_rect_min(), ui.item_rect_max(), charte::vec(charte::ACCENT, 0.15)).filled(true).build();
+                    if ui.is_mouse_clicked(MouseButton::Left) {
+                        aller = Some(s.debut);
+                    }
+                }
+            }
+        });
+        if let Some(a) = aller {
+            p.lecteur.aller_a(a);
+        }
+        if let Some(i) = basculer {
+            self.message = p.basculer_phrase(i);
+        }
+    }
+
     /// Lance l'enregistrement de l'écran, dans le dossier affiché.
     fn filmer_ecran(&mut self) {
         if self.capture.is_some() {
@@ -456,12 +541,21 @@ impl Monteur {
             Ok(c) => {
                 self.capture = Some(c);
                 self.message = "Choisis la fenêtre à filmer.".into();
+                self.raccourci.get_or_insert_with(raccourci::lancer);
             }
             Err(e) => self.message = e,
         }
     }
 
     fn suivre_capture(&mut self) {
+        while let Some(e) = self.raccourci.as_ref().and_then(|r| r.try_recv().ok()) {
+            match e {
+                raccourci::Evenement::Pret => eprintln!("raccourci global prêt"),
+                raccourci::Evenement::Appui => self.capture.iter_mut().for_each(capture::Capture::arreter),
+                // Le bouton Arrêter reste là : un simple mot, sans gêner.
+                raccourci::Evenement::Echec(e) => eprintln!("raccourci global indisponible : {e}"),
+            }
+        }
         if self.capture_prevue.is_some_and(|t| std::time::Instant::now() >= t) {
             self.capture_prevue = None;
             self.filmer_ecran();
@@ -471,7 +565,10 @@ impl Monteur {
         self.message = match fin {
             capture::Fin::Prise(p) => {
                 self.a_changer = Some(self.dossier.chemin.clone());
-                format!("Prise enregistrée : {} ({}).", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree))
+                let message = format!("Prise enregistrée : {} ({}). Préparation en cours.", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree));
+                self.a_ouvrir = Some(p.clone());
+                self.a_preparer = Some(p);
+                message
             }
             capture::Fin::Annulee => "Enregistrement annulé.".into(),
             capture::Fin::Erreur(e) => e,
@@ -724,13 +821,19 @@ impl Monteur {
             let _repos = ui.push_style_color(StyleColor::Button, charte::c(charte::ERREUR));
             let _survol = ui.push_style_color(StyleColor::ButtonHovered, charte::vec(charte::ERREUR, 0.85));
             let _appui = ui.push_style_color(StyleColor::ButtonActive, charte::vec(charte::ERREUR, 0.7));
-            let texte = match c.temps() {
+            let texte = match (c.temps(), c.decompte_restant()) {
                 _ if c.en_finition() => "Finition du son…".to_string(),
-                Some(t) => format!("Arrêter {}", chrono_court(t)),
-                None => "Annuler le choix".to_string(),
+                (_, Some(n)) => format!("Départ dans {n}"),
+                (Some(t), _) => format!("Arrêter {}", chrono_court(t)),
+                _ => "Annuler le choix".to_string(),
             };
             if ui.button_with_size(format!("{texte}###arret_capture"), [0.0, 30.0]) {
                 c.arreter();
+            }
+            drop((_appui, _survol, _repos));
+            if let Some(db) = c.niveau().filter(|_| !c.en_finition()) {
+                ui.same_line();
+                vu_metre(ui, db, c.micro_muet());
             }
         } else {
             if ui.button_with_size("Filmer…", [0.0, 30.0]) {
@@ -1066,6 +1169,7 @@ impl Monteur {
                 change |= ui.checkbox("Mettre le réglage en lumière", &mut r.mettre_en_lumiere);
                 change |= ui.checkbox("Montrer les sous-titres", &mut r.montrer_sous_titres);
                 change |= ui.checkbox("Incruster les sous-titres dans l'image", &mut r.incruster_sous_titres);
+                change |= ui.checkbox("Volume égal (référence YouTube)", &mut r.volume_egal);
                 let mut cale = r.decalage_journal;
                 if nombre(ui, "Calage des gestes (s)", &mut cale, 0.05) {
                     r.decalage_journal = cale;
@@ -1189,6 +1293,11 @@ impl Application for Monteur {
                 self.ecrire_fiches();
             }
             self.ouvrir(v);
+            if let (Some(f), Some(p)) = (self.a_preparer.take(), &mut self.prise)
+                && p.video == f
+            {
+                p.preparer();
+            }
         }
         if let Some(r) = &self.import
             && let Ok(resultat) = r.try_recv()
@@ -1397,12 +1506,16 @@ impl Application for Monteur {
             }
         });
         ui.window(&panneaux.inspecteur).build(|| self.panneau_inspecteur(ui));
+        ui.window(&panneaux.texte).build(|| self.panneau_texte(ui));
         ui.window(&panneaux.ligne).build(|| {
             if let Some(p) = &mut self.prise {
                 self.ligne.dessiner(ui, p, (&self.bande, bande));
             }
         });
 
+        if std::mem::take(&mut self.montrer_texte) {
+            ui.set_window_focus(Some("Texte###texte"));
+        }
         if std::mem::take(&mut self.montrer_youtube) {
             ui.set_window_focus(Some("YouTube###youtube"));
         }

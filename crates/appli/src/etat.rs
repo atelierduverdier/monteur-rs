@@ -222,6 +222,26 @@ impl Prise {
         }
     }
 
+    /// Coupe la phrase `i`, ou la rétablit si elle l'a déjà été par ce moyen.
+    pub fn basculer_phrase(&mut self, i: usize) -> String {
+        let Some(s) = self.montage.sous_titres.get(i) else { return String::new() };
+        let (a, b) = (noyau::arrondi::arrondi(s.debut, 3), noyau::arrondi::arrondi(s.fin, 3));
+        if let Some(c) = self.montage.coupes.iter().position(|c| c.origine == "texte" && c.debut == a && c.fin == b) {
+            self.retenir();
+            self.montage.coupes.remove(c);
+            self.modifie();
+            return "Phrase rétablie.".into();
+        }
+        if self.montage.dans_une_coupe((a + b) / 2.0) {
+            return "Cette phrase est déjà dans une coupe : à reprendre dans la ligne de temps.".into();
+        }
+        self.retenir();
+        self.montage.coupes.push(noyau::montage::Coupe { debut: a, fin: b, active: true, origine: "texte".into(), vitesse: 0.0, autres: Default::default() });
+        self.montage.trier();
+        self.modifie();
+        "Phrase coupée.".into()
+    }
+
     pub fn ajouter_coupe(&mut self, debut: f64, fin: f64) {
         self.retenir();
         self.montage.coupes.push(noyau::montage::Coupe {

@@ -25,3 +25,27 @@ taille de la fenêtre (1920 × 1168 ici), pas celle de l'écran.
 
 Essais de la fenêtre : `MONTEUR2_ECRAN` remplace le programme ; un script qui appelle le vrai avec
 `-w DP-1` évite le dialogue. Arrêt en 0,12 s.
+
+## Le lot du 05/11/2026
+
+**Volume égal** (Inspecteur, coché par défaut, écrit dans le montage seulement s'il est décoché) : le
+rendu mesure le son monté puis l'amène à −14 LUFS, crêtes à −1 dB (`loudnorm` en deux passages).
+Prise de 08:20 : −30,9 LUFS avant, −14,7 LUFS et −0,5 dB de crête après l'AAC.
+
+**Panneau Texte**, à côté de l'Inspecteur : un clic va à la phrase, « Couper » pose une coupe
+d'origine `texte` sur toute la phrase, « Rétablir » l'enlève, la recherche filtre, la phrase lue se
+colore et reste en vue. Une phrase déjà dans une autre coupe se reprend dans la ligne de temps.
+
+**À l'arrêt**, la prise s'ouvre et Préparer se lance seul.
+
+**Vu-mètre** à côté du bouton Arrêter : `parec` lit le micro à part, jusqu'à la saturation en rouge ;
+« Micro muet ? » au bout de 5 s sous −45 dB.
+
+**Décompte** : à la première image, l'enregistrement se met en pause (SIGUSR2) le temps de trois bips,
+puis repart. Mesuré : 2,1 s gardées sur 5 s avec 3 s de pause. Le nom de la prise compte ces 3 s,
+sinon les gestes seraient décalés.
+
+**Raccourci global** : Meta+F12 arrête, par le portail GlobalShortcuts. KDE fait confirmer la touche
+au premier enregistrement. Le portail refuse une appli sans identité : `outils/installer.sh` pose le
+`.desktop` `fr.atelierduverdier.Monteur2`, qui donne aussi le lanceur du menu. Identité acceptée le
+05/11 ; l'appui lui-même reste à essayer.

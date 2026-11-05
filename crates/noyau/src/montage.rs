@@ -201,8 +201,16 @@ pub struct Reglages {
     pub decalage_journal: f64,
     pub mettre_en_lumiere: bool,
     pub calage_auto: bool,
+    /// Le son du rendu amené au volume de YouTube. Écrit seulement s'il est décoché : le fichier
+    /// reste celui du Monteur 1.
+    #[serde(skip_serializing_if = "est_vrai")]
+    pub volume_egal: bool,
     #[serde(flatten)]
     pub autres: Autres,
+}
+
+fn est_vrai(v: &bool) -> bool {
+    *v
 }
 
 impl Default for Reglages {
@@ -216,6 +224,7 @@ impl Default for Reglages {
             decalage_journal: 0.0,
             mettre_en_lumiere: true,
             calage_auto: true,
+            volume_egal: true,
             autres: Autres::new(),
         }
     }
