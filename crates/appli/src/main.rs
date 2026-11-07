@@ -730,7 +730,9 @@ impl Monteur {
             return;
         }
         let dossier = if simple { self.copies.clone() } else { self.dossier.chemin.clone() };
-        match capture::Capture::lancer(&dossier, &chemin_jeton_portail(), !simple) {
+        // Un enregistrement simple vise souvent une autre fenêtre que la dernière : on la redemande.
+        let jeton = chemin_jeton_portail();
+        match capture::Capture::lancer(&dossier, (!simple).then_some(jeton.as_path()), !simple) {
             Ok(c) => {
                 self.capture = Some(c);
                 self.capture_simple = simple;
@@ -1057,7 +1059,7 @@ impl Monteur {
                 self.filmer_ecran();
             }
             ui.same_line();
-            if outil(ui, "##simple", Icone::Filmer, "Enregistrement simple", charte::ALERTE, Allure::Simple, "Toujours dans Copies d'écran, sans décompte ni préparation : le projet ouvert ne bouge pas.") {
+            if outil(ui, "##simple", Icone::Filmer, "Enregistrement simple", charte::ALERTE, Allure::Simple, "Choisis la fenêtre à chaque fois. Toujours dans Copies d'écran, sans décompte ni préparation : le projet ouvert ne bouge pas.") {
                 self.capture_prevue = None;
                 self.filmer_simple();
             }

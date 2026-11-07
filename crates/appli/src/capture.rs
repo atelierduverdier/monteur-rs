@@ -157,17 +157,22 @@ fn meler_le_son(brut: &Path, sortie: &Path) -> Result<(), String> {
 }
 
 impl Capture {
-    /// `jeton` : où le portail garde la fenêtre choisie, pour ne pas la redemander.
+    /// `jeton` : où le portail garde la fenêtre choisie, pour ne pas la redemander. `None` : le
+    /// dialogue s'ouvre, et ce choix-là ne remplace pas la fenêtre gardée.
     /// `avec_decompte` : les trois bips avant de filmer.
-    pub fn lancer(dossier: &Path, jeton: &Path, avec_decompte: bool) -> Result<Self, String> {
+    pub fn lancer(dossier: &Path, jeton: Option<&Path>, avec_decompte: bool) -> Result<Self, String> {
         let programme = std::env::var_os("MONTEUR2_ECRAN").unwrap_or_else(|| "gpu-screen-recorder".into());
         let partiel = dossier.join(format!("capture {}.partiel.mp4", noyau::maintenant().replace([':', '/'], "-")));
-        let mut enfant = Command::new(&programme)
+        let mut commande = Command::new(&programme);
+        commande
             .args(["-w", "portal", "-f", "30", "-cursor", "yes", "-c", "mp4", "-ac", "aac", "-ab", "192"])
             .args(["-a", "default_output", "-a", "default_input"])
-            .args(["-restore-portal-session", "yes", "-write-first-frame-ts", "yes"])
-            .arg("-portal-session-token-filepath")
-            .arg(jeton)
+            .args(["-write-first-frame-ts", "yes"]);
+        match jeton {
+            Some(j) => commande.args(["-restore-portal-session", "yes", "-portal-session-token-filepath"]).arg(j),
+            None => commande.args(["-restore-portal-session", "no"]),
+        };
+        let mut enfant = commande
             .arg("-o")
             .arg(&partiel)
             .stdin(Stdio::null())
