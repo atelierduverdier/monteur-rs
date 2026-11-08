@@ -35,6 +35,9 @@ pub struct Capture {
     /// Les secondes filmées, figées à l'arrêt.
     pub duree: Option<f64>,
     stoppee: bool,
+    /// L'arrêt demandé, et les relances déjà faites (SIGTERM, puis SIGKILL) si l'enregistreur ne répond pas.
+    arret: Option<Instant>,
+    relances: u8,
     fini: bool,
     derniere_ligne: Arc<Mutex<String>>,
     /// La mise au propre du son, en fond : elle dure quelques secondes sur une longue prise.
@@ -194,7 +197,7 @@ impl Capture {
                 }
             });
         }
-        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: Micro::lancer(), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, fini: false, derniere_ligne, travail: None })
+        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: Micro::lancer(), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, arret: None, relances: 0, fini: false, derniere_ligne, travail: None })
     }
 
     /// Les secondes filmées ; `None` tant que la fenêtre n'est pas choisie.
@@ -226,11 +229,25 @@ impl Capture {
     }
 
     /// SIGINT : gpu-screen-recorder termine son fichier en 0,1 s environ.
+    ///
+    /// L'ENREGISTREUR QUI NE RÉPOND PLUS (08/11/2026, Christophe : VerdierCAM fermé aussitôt la prise lancée, « je n'ai pas
+    /// possibilité d'arrêter l'enregistrement du Monteur ») : le bouton envoyait SIGINT une fois, puis plus rien — un
+    /// programme resté sourd gardait « Arrêter » à l'écran pour toujours. `suivre` relance : SIGTERM après 3 s, SIGKILL
+    /// après 6 s ; un second clic force tout de suite.
     pub fn arreter(&mut self) {
         if !self.stoppee {
             self.stoppee = true;
+            self.arret = Some(Instant::now());
             signal(&self.enfant, "-INT");
+        } else if !self.fini {
+            self.relances = 2;
+            let _ = self.enfant.kill();
         }
+    }
+
+    /// L'arrêt est demandé, le programme tourne encore.
+    pub fn en_arret(&self) -> bool {
+        self.stoppee && !self.fini
     }
 
     /// À appeler à chaque tour ; `Some` une seule fois, quand le programme a fini.
@@ -259,6 +276,16 @@ impl Capture {
             signal(&self.enfant, "-USR2");
             self.decale = d.elapsed().as_secs_f64();
             self.debut = Some(Instant::now());
+        }
+        if let Some(a) = self.arret {
+            let ecoule = a.elapsed().as_secs_f64();
+            if ecoule >= 3.0 && self.relances == 0 {
+                self.relances = 1;
+                signal(&self.enfant, "-TERM");
+            } else if ecoule >= 6.0 && self.relances == 1 {
+                self.relances = 2;
+                let _ = self.enfant.kill();
+            }
         }
         let etat = self.enfant.try_wait().ok()??;
         self.fini = true;
@@ -351,6 +378,31 @@ impl Drop for Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VerdierCAM fermé pendant la prise (Christophe, 08/11/2026 : « je n'ai pas possibilité d'arrêter l'enregistrement du
+    /// Monteur ») : un enregistreur qui ne répond plus à SIGINT doit quand même finir, sans quoi le bouton reste à
+    /// « Arrêter » pour toujours. Un faux enregistreur qui ignore SIGINT le joue.
+    #[test]
+    fn un_enregistreur_sourd_finit_quand_meme() {
+        let dossier = std::env::temp_dir().join(format!("monteur-sourd-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let faux = dossier.join("sourd.sh");
+        std::fs::write(&faux, "#!/bin/sh\ntrap '' INT\nsleep 60\n").unwrap();
+        Command::new("chmod").arg("+x").arg(&faux).status().unwrap();
+        // SAFETY : ce contrôle est le seul de ce module à lire MONTEUR2_ECRAN.
+        unsafe { std::env::set_var("MONTEUR2_ECRAN", &faux) };
+        let mut c = Capture::lancer(&dossier, None, false).unwrap();
+        std::thread::sleep(Duration::from_millis(500));   // que le faux ait posé son « trap » : sinon SIGINT l'abat
+        c.arreter();
+        let limite = Instant::now() + Duration::from_secs(15);
+        let mut fin = None;
+        while fin.is_none() && Instant::now() < limite {
+            fin = c.suivre();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_dir_all(&dossier);
+        assert!(fin.is_some(), "l'enregistreur sourd tourne encore 15 s après « Arrêter »");
+    }
 
     #[test]
     fn crete_du_micro() {

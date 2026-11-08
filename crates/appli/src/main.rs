@@ -1042,6 +1042,7 @@ impl Monteur {
         if let Some(c) = &mut self.capture {
             let texte = match (c.temps(), c.decompte_restant()) {
                 _ if c.en_finition() => "Finition du son…".to_string(),
+                _ if c.en_arret() => "Arrêt en cours… (cliquer force)".to_string(),
                 (_, Some(n)) => format!("Départ dans {n}"),
                 (Some(t), _) => format!("Arrêter {}", chrono_court(t)),
                 _ => "Annuler le choix".to_string(),
