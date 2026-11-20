@@ -112,6 +112,7 @@ dependencies = [
 name = "appli"
 version = "0.1.0"
 dependencies = [
+ "alsa",
  "ashpd",
  "charte",
  "composeur",

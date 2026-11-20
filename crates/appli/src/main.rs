@@ -7,6 +7,7 @@
 mod capture;
 mod etat;
 mod ligne;
+mod midi;
 mod miniatures;
 mod outils;
 mod raccourci;
@@ -219,6 +220,8 @@ struct Monteur {
     capture_prevue: Option<std::time::Instant>,
     /// Le raccourci global, demandé au premier enregistrement.
     raccourci: Option<Receiver<raccourci::Evenement>>,
+    /// Le nanoKONTROL2, écouté dès le lancement.
+    midi: midi::Midi,
     /// La prise dont on demande la mise à la corbeille, en attente de confirmation.
     a_jeter: Option<PathBuf>,
     ouvrir_corbeille: bool,
@@ -306,7 +309,12 @@ impl Monteur {
         let dossier = Dossier::lire(&copies, &fiches);
         let racine = std::env::var_os("MONTEUR2_PROJETS").map(PathBuf::from).unwrap_or_else(noyau::projets::racine);
         let projets = noyau::projets::lister(&racine);
-        let message = format!("{} prise(s) dans {}", dossier.prises.len(), dossier.chemin.display());
+        let midi = midi::Midi::lancer(&chemin_fiches().with_file_name("nanokontrol2.json"));
+        let message = if midi.avis.is_empty() {
+            format!("{} prise(s) dans {}", dossier.prises.len(), dossier.chemin.display())
+        } else {
+            format!("nanokontrol2.json : {}.", midi.avis.join(" ; "))
+        };
         let miniatures = miniatures::Miniatures::lancer(dossier.prises.iter().map(|p| p.0.clone()).collect());
         Self {
             panneaux: Panneaux::new(),
@@ -341,6 +349,7 @@ impl Monteur {
             capture: None,
             capture_prevue: None,
             raccourci: None,
+            midi,
             capture_simple: false,
             a_jeter: None,
             ouvrir_corbeille: false,
@@ -1514,6 +1523,7 @@ impl Application for Monteur {
             }
         }
         self.suivre_capture();
+        self.suivre_midi();
         // La liste suit le dossier toute seule : une prise d'OBS y apparaît en quelques secondes.
         if self.regarde.elapsed().as_secs() >= 2 {
             self.regarde = std::time::Instant::now();
@@ -1881,6 +1891,10 @@ impl Application for Monteur {
                     if ui.small_button("Arrêter le rendu") {
                         r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
+                }
+                if let Some(nom) = &self.midi.branche {
+                    ui.same_line_with_pos(taille[0] - 470.0);
+                    ui.text_colored(charte::c(charte::UNIT), nom);
                 }
                 if let Some(p) = &self.prise {
                     if let Some(prep) = &p.preparation {

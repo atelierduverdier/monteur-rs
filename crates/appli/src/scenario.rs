@@ -5,8 +5,9 @@
 //! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
 //! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
 //! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `filmer_simple`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
-//! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `planter` (essai du journal des plantages),
-//! `quitter`.
+//! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `dire_voix` (les réglages
+//! de la voix), `midi <cc> <valeur>` (un message du nanoKONTROL2 : 127 appuie un bouton, 0 le relâche),
+//! `planter` (essai du journal des plantages), `quitter`.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -209,19 +210,28 @@ impl Scenario {
                 "dire" => {
                     if let Some(p) = &m.prise {
                         let mo = &p.montage;
+                        let zoom = match p.choix {
+                            Some(Choix { sorte: Sorte::Zoom, indice }) => {
+                                mo.zooms.get(indice).map(|z| format!(", zoom choisi ×{} ({}, {})", z.facteur, z.cx, z.cy)).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        };
                         println!(
-                            "  position {:.3} s, en lecture {}, {} zooms, {} étiquettes, {} clics, {} coupes, durée montée {:.1} s ; {}",
+                            "  position {:.3} s, en lecture {}, {} zooms, {} étiquettes, {} clics, {} coupes, {} chapitres, durée montée {:.1} s{zoom} ; {}",
                             p.lecteur.position(),
                             p.lecteur.en_lecture(),
                             mo.zooms.len(),
                             mo.etiquettes.len(),
                             mo.clics.len(),
                             mo.coupes.len(),
+                            mo.chapitres.len(),
                             mo.duree_montee(),
                             m.message
                         );
                     }
                 }
+                "dire_voix" => println!("  voix {:?}, fenêtre ouverte {}", m.voix.reglages, m.voix.ouverte),
+                "midi" => m.midi_cc(nombre(1) as u8, nombre(2) as u8),
                 "quitter" => return true,
                 // Pour vérifier que le journal des plantages s'écrit.
                 "planter" => panic!("plantage voulu par le déroulé d'essai"),

@@ -125,6 +125,12 @@ impl FenetreVoix {
         self.a_refaire = Some(Instant::now());
     }
 
+    /// Un réglage changé d'ailleurs que la fenêtre (les faders) : l'écoute se refait comme au curseur.
+    pub fn regler(&mut self, changer: impl FnOnce(&mut Voix)) {
+        changer(&mut self.reglages);
+        self.a_refaire = Some(Instant::now());
+    }
+
     fn calculer(&mut self, video: PathBuf, t: f64) {
         let voix = self.reglages.clone();
         let debut = (t - DUREE / 2.0).max(0.0);

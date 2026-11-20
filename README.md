@@ -15,7 +15,8 @@ cargo build --release
 target/release/monteur2
 ```
 
-Voir [docs/etape-3.md](docs/etape-3.md) pour ce que la fenêtre sait faire.
+Voir [docs/etape-3.md](docs/etape-3.md) pour ce que la fenêtre sait faire, et
+[docs/nanokontrol2.md](docs/nanokontrol2.md) pour le nanoKONTROL2.
 
 ## Construire
 
