@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Monteur 2
+Name=Monteur VerdierCAM
 GenericName=Montage vidéo
-Comment=Filmer, monter et envoyer une vidéo
+Comment=Filmer VerdierCAM, monter et préparer une vidéo
 Exec=@EXEC@ %f
 Icon=fr.atelierduverdier.Monteur2
 Terminal=false

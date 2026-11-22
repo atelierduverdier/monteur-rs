@@ -66,3 +66,25 @@ devient « Envoi par YouTube Studio » : Copier le titre, la description, les mo
 Montrer la vidéo ; les noms de la vidéo montée et de la vignette à y glisser. Le presse-papiers est enfin relié au
 système (`presse_papiers.rs`, arboard) : Ctrl+C et Ctrl+V marchent aussi dans les champs, qui ne parlaient qu'à
 eux-mêmes. Chez Christophe, `youtube-envoi` est là : rien ne change.
+
+# Lot 5 : tout le reste (22/11/2026)
+
+- **Le nom public**, « Monteur VerdierCAM » (décidé par Christophe) : titre de la fenêtre, lanceur, paquets
+  (`Monteur-VerdierCAM-<version>-…`), `Monteur VerdierCAM.exe` sous Windows. L'identité technique ne bouge pas
+  (`fr.atelierduverdier.Monteur2`, `monteur2`) : le raccourci accordé par KDE, le verrou du Monteur 1 et les essais
+  en dépendent.
+- **L'icône et la fiche du `.exe`** (`ressources/monteur.ico`, tirée du SVG ; `ressources/monteur.rc` : nom, version,
+  éditeur), compilées par windres et liées au programme ; la barre de titre la prend aussi (`vendor/dear-app`).
+- **La licence** : GPL-3.0-or-later en clair (`LICENSE`), la marque VerdierCAM à part (`MARQUE.md`), l'adresse du
+  code dans le LISEZMOI et « À propos ». Christophe rendra le dépôt public.
+- **Aide › Ce qu'il faut** : chaque outil, trouvé ou non, et de quoi réparer (télécharger le modèle, choisir
+  VerdierCAM). Elle s'ouvre seule au premier lancement, ou quand ffmpeg manque. **Aide › Mode d'emploi** ouvre
+  `docs/mode-emploi.md` mis en page (`outils/mode-emploi-html.py`), livré dans les deux paquets. **À propos**.
+- **La vignette à son nom** : panneau Vignette › Chaîne, le nom et le logo (PNG, ramené dans le carré de 60 px) de
+  sa chaîne à la place de ceux de VerdierCAM, pour toutes les prises (`monteur/marque.json`). La marque d'office ne
+  change pas un pixel (contrôlé contre le Monteur 1).
+- **Le carton « Fait avec VerdierCAM »** : 2 s à la fin de la vidéo avec vignette, sur le fond du montage (le logo,
+  la phrase, verdiercam.fr). Coché d'office dans les réglages du montage ; écrit dans `montage.json` seulement
+  décoché, comme le fondu. Sans carton, la commande de montage reste celle du Monteur 1 (contrôlé). Essayé : 3 s de
+  vignette + 8 s de prise + 2 s de carton = 13,0 s, l'image de travail du carton effacée.
+- **Le paquet Linux** : [linux.md](linux.md).

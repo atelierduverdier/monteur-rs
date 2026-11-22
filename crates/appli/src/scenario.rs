@@ -153,6 +153,8 @@ impl Scenario {
                     }
                 }
                 "fenetre_voix" => m.voix.ouvrir(),
+                "ce_qu_il_faut" => m.ouvrir_ce_qu_il_faut = true,
+                "a_propos" => m.ouvrir_a_propos = true,
                 "fenetre_rendre" => m.fenetre_rendre = true,
                 "file" => m.mettre_en_file(nombre(1) as usize, false),
                 "fermer_projet" => m.fermer_projet(),

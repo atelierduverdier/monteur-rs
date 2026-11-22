@@ -12,7 +12,7 @@ use crate::arrondi::{entier, longueur};
 use crate::description::{Description, normaliser_mots_cles};
 use crate::fiches::{Fiche, Fiches};
 use crate::{
-    DUREE_VIGNETTE, EXTENSIONS, Erreur, FOND_MONTAGE, IMAGE_H, IMAGE_L, SUFFIXE_MONTEE, SUFFIXE_PNG, SUFFIXES_DERIVES,
+    DUREE_CARTON, DUREE_VIGNETTE, EXTENSIONS, Erreur, FOND_MONTAGE, IMAGE_H, IMAGE_L, SUFFIXE_MONTEE, SUFFIXE_PNG, SUFFIXES_DERIVES,
     SUFFIXES_LIES,
 };
 
@@ -321,7 +321,9 @@ pub fn commande_image(video: &Path, temps: f64, duree: Option<f64>) -> Vec<Strin
 /// ffmpeg qui colle 3 s de vignette (silencieuses) devant la vidéo. La vignette est agrandie à la
 /// largeur de la vidéo, posée sur un fond sombre à sa taille. Avancement sur la sortie standard
 /// (-progress), en microsecondes.
-pub fn commande_montage(video: &Path, vignette: &Path, sortie: &Path, infos: &Infos) -> Vec<String> {
+/// La vignette 3 s en tête de la vidéo, et le carton de fin s'il y en a un (`DUREE_CARTON`, en queue). Sans carton,
+/// la commande est celle du Monteur 1.
+pub fn commande_montage(video: &Path, vignette: &Path, sortie: &Path, infos: &Infos, carton: Option<&Path>) -> Vec<String> {
     // libx264 en 4:2:0 veut des dimensions paires : la dernière colonne et la dernière ligne
     // d'une capture impaire sont rognées, pas rééchantillonnées.
     let l = infos.largeur - infos.largeur % 2;
@@ -340,19 +342,45 @@ pub fn commande_montage(video: &Path, vignette: &Path, sortie: &Path, infos: &In
         "[0:v]scale={l}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,\
          pad={l}:{h}:(ow-iw)/2:(oh-ih)/2:color={FOND_MONTAGE},format=yuv420p,setsar=1,fps={ips}[v0]"
     );
-    let (filtre, sorties): (String, Vec<String>) = if infos.son {
-        cmd.extend([
-            s("-f"), s("lavfi"), s("-t"), format!("{DUREE_VIGNETTE:?}"), s("-i"),
-            format!("anullsrc=r={}:cl={}", infos.frequence, infos.disposition), s("-i"),
-            video.to_string_lossy().into_owned(),
-        ]);
-        (
-            format!("{tete};[2:v]{pair}[v1];[v0][1:a][v1][2:a]concat=n=2:v=1:a=1[v][a]"),
-            vec![s("-map"), s("[v]"), s("-map"), s("[a]"), s("-c:a"), s("aac"), s("-b:a"), s("192k")],
+    // Le carton : une image tenue DUREE_CARTON, mise à la taille comme la vignette, et du silence s'il y a du son.
+    let image_tenue = |chemin: &Path, duree: f64| {
+        vec![s("-loop"), s("1"), s("-framerate"), ips.clone(), s("-t"), format!("{duree:?}"), s("-f"), s("image2"), s("-pattern_type"), s("none"), s("-i"), chemin.to_string_lossy().into_owned()]
+    };
+    let silence = |duree: f64| vec![s("-f"), s("lavfi"), s("-t"), format!("{duree:?}"), s("-i"), format!("anullsrc=r={}:cl={}", infos.frequence, infos.disposition)];
+    let a_la_taille = |entree: usize, sortie: &str| {
+        format!(
+            "[{entree}:v]scale={l}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,\
+             pad={l}:{h}:(ow-iw)/2:(oh-ih)/2:color={FOND_MONTAGE},format=yuv420p,setsar=1,fps={ips}[{sortie}]"
         )
-    } else {
-        cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
-        (format!("{tete};[1:v]{pair}[v1];[v0][v1]concat=n=2:v=1:a=0[v]"), vec![s("-map"), s("[v]")])
+    };
+    let (filtre, sorties): (String, Vec<String>) = match (infos.son, carton) {
+        (true, None) => {
+            cmd.extend(silence(DUREE_VIGNETTE));
+            cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
+            (
+                format!("{tete};[2:v]{pair}[v1];[v0][1:a][v1][2:a]concat=n=2:v=1:a=1[v][a]"),
+                vec![s("-map"), s("[v]"), s("-map"), s("[a]"), s("-c:a"), s("aac"), s("-b:a"), s("192k")],
+            )
+        }
+        (false, None) => {
+            cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
+            (format!("{tete};[1:v]{pair}[v1];[v0][v1]concat=n=2:v=1:a=0[v]"), vec![s("-map"), s("[v]")])
+        }
+        (true, Some(c)) => {
+            cmd.extend(silence(DUREE_VIGNETTE));
+            cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
+            cmd.extend(image_tenue(c, DUREE_CARTON));
+            cmd.extend(silence(DUREE_CARTON));
+            (
+                format!("{tete};[2:v]{pair}[v1];{};[v0][1:a][v1][2:a][v2][4:a]concat=n=3:v=1:a=1[v][a]", a_la_taille(3, "v2")),
+                vec![s("-map"), s("[v]"), s("-map"), s("[a]"), s("-c:a"), s("aac"), s("-b:a"), s("192k")],
+            )
+        }
+        (false, Some(c)) => {
+            cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
+            cmd.extend(image_tenue(c, DUREE_CARTON));
+            (format!("{tete};[1:v]{pair}[v1];{};[v0][v1][v2]concat=n=3:v=1:a=0[v]", a_la_taille(2, "v2")), vec![s("-map"), s("[v]")])
+        }
     };
     cmd.extend([s("-filter_complex"), filtre]);
     cmd.extend(sorties);

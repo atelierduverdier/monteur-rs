@@ -1,5 +1,5 @@
 #!/bin/bash
-# Voir la version Windows du Monteur (dist/…/monteur2.exe) sous Wine, comme outils/voir-fenetre.sh voit celle de
+# Voir la version Windows du Monteur (dist/…/Monteur VerdierCAM.exe) sous Wine, comme outils/voir-fenetre.sh voit celle de
 # Linux : un KWin virtuel à part, sa propre session D-Bus, le son du vrai poste. Wine travaille dans un HOME jetable
 # (DOSSIER/maison) : ni ~/.wine, ni le menu du bureau, ni les vraies vidéos ne sont touchés.
 #
@@ -12,8 +12,8 @@
 set -u
 D=$1; PRISES=$2; SC=$3; shift 3
 ICI=$(cd "$(dirname "$0")/.." && pwd)
-EXE=${MONTEUR2_EXE:-$(ls -d "$ICI"/dist/Monteur2-*-windows-x64/monteur2.exe 2>/dev/null | tail -1)}
-[ -f "$EXE" ] || { echo "Pas de monteur2.exe : outils/construire-windows.sh d'abord." >&2; exit 1; }
+EXE=${MONTEUR2_EXE:-$(ls -d "$ICI"/dist/Monteur-VerdierCAM-*-windows-x64/"Monteur VerdierCAM.exe" 2>/dev/null | tail -1)}
+[ -f "$EXE" ] || { echo "Pas de « Monteur VerdierCAM.exe » : outils/construire-windows.sh d'abord." >&2; exit 1; }
 W="$D/maison"
 mkdir -p "$D/run" "$W"; chmod 700 "$D/run"
 XDG_RUNTIME_DIR="$D/run" kwin_wayland --virtual --no-lockscreen --no-global-shortcuts --socket=t \

@@ -250,6 +250,15 @@ impl WindowState {
                         use winit::platform::wayland::WindowAttributesExtWayland;
                         attributs.with_name("fr.atelierduverdier.Monteur2", "")
                     };
+                    // Monteur : sous Windows, l'icône de la barre de titre est celle des ressources de l'exécutable.
+                    #[cfg(target_os = "windows")]
+                    let attributs = {
+                        use winit::platform::windows::IconExtWindows;
+                        match winit::window::Icon::from_resource(1, None) {
+                            Ok(icone) => attributs.with_window_icon(Some(icone)),
+                            Err(_) => attributs,
+                        }
+                    };
                     attributs
                 })
                 .map_err(RunError::WindowCreation)?,

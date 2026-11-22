@@ -100,9 +100,35 @@ pub fn debordements(fiche: &Fiche, polices: &Polices) -> Vec<(&'static str, i64)
         .collect()
 }
 
-/// La vignette 1280 × 720. `image` : l'image pleine de la vidéo ; `cadre` : la part à mettre à
-/// droite, en pixels de cette image (sans cadre, toute l'image est mise à 646 × 720).
+/// Le nom et le logo du haut du bandeau : VerdierCAM d'office, ou ceux d'une chaîne.
+pub struct Marque {
+    pub nom: String,
+    pub logo: Option<Pixmap>,
+}
+
+impl Default for Marque {
+    fn default() -> Self {
+        Self { nom: "VerdierCAM".into(), logo: Pixmap::decode_png(LOGO).ok() }
+    }
+}
+
+/// Le logo de la marque, ramené dans le carré de 60 px du logo de VerdierCAM.
+fn poser_logo(v: &mut Pixmap, logo: &Pixmap) {
+    let k = (60.0 / logo.width().max(logo.height()) as f32).min(1.0);
+    let (l, h) = (logo.width() as f32 * k, logo.height() as f32 * k);
+    let tr = Transform::from_translate(76.0 + (60.0 - l) / 2.0, 70.0 + (60.0 - h) / 2.0).pre_scale(k, k);
+    let peinture = PixmapPaint { quality: FilterQuality::Bicubic, ..PixmapPaint::default() };
+    v.draw_pixmap(0, 0, logo.as_ref(), &peinture, tr, None);
+}
+
+/// La vignette 1280 × 720 à la marque VerdierCAM. `image` : l'image pleine de la vidéo ; `cadre` : la part à mettre
+/// à droite, en pixels de cette image (sans cadre, toute l'image est mise à 646 × 720).
 pub fn vignette(fiche: &Fiche, image: Option<PixmapRef>, cadre: Option<[i64; 4]>, polices: &Polices) -> Pixmap {
+    vignette_a_la_marque(fiche, image, cadre, polices, &Marque::default())
+}
+
+/// La vignette à la marque d'une chaîne : son nom et son logo à la place de ceux de VerdierCAM.
+pub fn vignette_a_la_marque(fiche: &Fiche, image: Option<PixmapRef>, cadre: Option<[i64; 4]>, polices: &Polices, marque: &Marque) -> Pixmap {
     let mut v = Pixmap::new(VIGNETTE_L as u32, VIGNETTE_H as u32).expect("taille fixe");
     v.fill(Color::from_rgba8(FOND.0, FOND.1, FOND.2, 255));
     if let Some(image) = image {
@@ -118,15 +144,24 @@ pub fn vignette(fiche: &Fiche, image: Option<PixmapRef>, cadre: Option<[i64; 4]>
     }
     // Le filet orange du bord gauche (pixels 0 à 11), net.
     v.fill_rect(Rect::from_xywh(0.0, 0.0, 12.0, VIGNETTE_H as f32).unwrap(), &plein(ORANGE, false), Transform::identity(), None);
-    if let Some(logo) = Pixmap::decode_png(LOGO).ok() {
-        v.draw_pixmap(76, 70, logo.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+    // Le logo de VerdierCAM se pose tel quel (60 × 60, au pixel près comme le Monteur 1) ; un autre se ramène à 60.
+    if let Some(logo) = &marque.logo {
+        if logo.width() == 60 && logo.height() == 60 {
+            v.draw_pixmap(76, 70, logo.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        } else {
+            poser_logo(&mut v, logo);
+        }
     }
     let texte = |v: &mut Pixmap, t: &str, gras: bool, corps: f32, c, x: i64, y: i64| {
         if let Some(chemin) = polices.de(gras).chemin(t, corps, x as f32, y as f32) {
             v.fill_path(&chemin, &plein(c, true), FillRule::Winding, Transform::identity(), None);
         }
     };
-    texte(&mut v, "VerdierCAM", true, 40.0, ORANGE, 160, 113);
+    // Un nom trop long se resserre pour ne pas mordre sur l'image.
+    let place = (BANDEAU - MARGE_DROITE - 160) as f32;
+    let large = polices.de(true).avance(&marque.nom, 40.0);
+    let corps = if large > place { (40.0 * place / large).floor() } else { 40.0 };
+    texte(&mut v, &marque.nom, true, corps, ORANGE, 160, 113);
     for (champ, s) in STYLES {
         if champ == "ligne1" {
             // Le trait orange, entre le sous-titre et les trois lignes (pixels 70 à 150, 430 à 436).
@@ -158,5 +193,75 @@ mod tests_titre {
         f.corps_titre = 130.0;
         assert_eq!(corps_de(&f, "titre", &titre, &p), 130.0);
         assert!(!debordements(&f, &p).is_empty());
+    }
+}
+
+/// Le carton « Fait avec VerdierCAM », 1280 × 720, sur le fond du montage (la vidéo s'y fond sans bord) : le logo,
+/// la phrase, l'adresse.
+pub fn carton_de_fin(polices: &Polices) -> Pixmap {
+    let fond = u32::from_str_radix(noyau::FOND_MONTAGE.trim_start_matches("0x"), 16).unwrap_or(0x121214);
+    let mut v = Pixmap::new(VIGNETTE_L as u32, VIGNETTE_H as u32).expect("taille fixe");
+    v.fill(Color::from_rgba8((fond >> 16) as u8, (fond >> 8) as u8, fond as u8, 255));
+    if let Ok(logo) = Pixmap::decode_png(LOGO) {
+        // Le logo à trois fois sa taille, au-dessus de la phrase.
+        let tr = Transform::from_translate(640.0 - 90.0, 170.0).pre_scale(3.0, 3.0);
+        v.draw_pixmap(0, 0, logo.as_ref(), &PixmapPaint { quality: FilterQuality::Bicubic, ..PixmapPaint::default() }, tr, None);
+    }
+    let centre = |v: &mut Pixmap, t: &str, gras: bool, corps: f32, c, y: f32| {
+        let x = 640.0 - polices.de(gras).avance(t, corps) / 2.0;
+        if let Some(chemin) = polices.de(gras).chemin(t, corps, x, y) {
+            v.fill_path(&chemin, &plein(c, true), FillRule::Winding, Transform::identity(), None);
+        }
+    };
+    centre(&mut v, "Fait avec VerdierCAM", true, 72.0, BLANC, 470.0);
+    centre(&mut v, "verdiercam.fr", false, 40.0, ORANGE, 545.0);
+    v
+}
+
+#[cfg(test)]
+mod tests_marque {
+    use super::*;
+
+    fn polices() -> Polices {
+        Polices::charger()
+    }
+
+    /// La marque d'office est celle de VerdierCAM : la vignette ne change pas d'un pixel.
+    #[test]
+    fn la_marque_d_office_ne_change_rien() {
+        let p = polices();
+        let f = Fiche { titre: "Essai".into(), ..Fiche::default() };
+        assert_eq!(vignette(&f, None, None, &p).data(), vignette_a_la_marque(&f, None, None, &p, &Marque::default()).data());
+    }
+
+    /// Une autre chaîne : son nom à la place, son logo ramené dans le carré, le reste de la vignette identique.
+    #[test]
+    fn une_autre_chaine() {
+        let p = polices();
+        let f = Fiche { titre: "Essai".into(), ..Fiche::default() };
+        let mut logo = Pixmap::new(200, 100).unwrap();
+        logo.fill(Color::from_rgba8(0, 200, 0, 255));
+        let a = vignette(&f, None, None, &p);
+        let b = vignette_a_la_marque(&f, None, None, &p, &Marque { nom: "Mon atelier de bois tourné et sculpté".into(), logo: Some(logo) });
+        let px = |v: &Pixmap, x: u32, y: u32| v.pixel(x, y).unwrap().demultiply();
+        // Le logo vert, 60 × 30, centré dans le carré (76…136, 85…115).
+        assert_eq!((px(&b, 100, 100).red(), px(&b, 100, 100).green()), (0, 200));
+        assert_ne!(px(&b, 100, 75).green(), 200, "au-dessus du logo ramené, pas de vert");
+        // Le nom s'est resserré : rien au-delà du bandeau.
+        for x in BANDEAU as u32 - MARGE_DROITE as u32..BANDEAU as u32 {
+            assert_eq!(px(&b, x, 100), px(&a, x, 100));
+        }
+        // Le titre n'a pas bougé.
+        assert_eq!(px(&a, 100, 260), px(&b, 100, 260));
+    }
+
+    #[test]
+    fn un_carton_de_fin() {
+        let c = carton_de_fin(&polices());
+        assert_eq!((c.width(), c.height()), (1280, 720));
+        let px = |x: u32, y: u32| c.pixel(x, y).unwrap().demultiply();
+        assert_eq!((px(5, 5).red(), px(5, 5).green(), px(5, 5).blue()), (0x12, 0x12, 0x14), "le fond du montage");
+        let blancs = (300..980).filter(|&x| (430..480).any(|y| px(x, y).red() > 240 && px(x, y).blue() > 240)).count();
+        assert!(blancs > 100, "la phrase est écrite : {blancs}");
     }
 }

@@ -204,6 +204,10 @@ pub struct Reglages {
     /// Durée du fondu à chaque coupe, en secondes ; 0 : coupes franches.
     #[serde(skip_serializing_if = "fondu_par_defaut")]
     pub fondu: f64,
+    /// Le carton « Fait avec VerdierCAM » à la fin de la vidéo avec vignette ; écrit seulement décoché, le
+    /// Monteur 1 ne le connaît pas.
+    #[serde(skip_serializing_if = "est_vrai")]
+    pub carton_fin: bool,
     #[serde(flatten)]
     pub autres: Autres,
 }
@@ -212,6 +216,10 @@ pub const FONDU_DEFAUT: f64 = 0.4;
 
 fn fondu_par_defaut(v: &f64) -> bool {
     *v == FONDU_DEFAUT
+}
+
+fn est_vrai(v: &bool) -> bool {
+    *v
 }
 
 impl Default for Reglages {
@@ -226,6 +234,7 @@ impl Default for Reglages {
             mettre_en_lumiere: true,
             calage_auto: true,
             fondu: FONDU_DEFAUT,
+            carton_fin: true,
             autres: Autres::new(),
         }
     }

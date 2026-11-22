@@ -59,6 +59,9 @@ pub const IMAGE_L: i64 = 646;
 pub const IMAGE_H: i64 = 720;
 pub const FOND_MONTAGE: &str = "0x121214";
 pub const DUREE_VIGNETTE: f64 = 3.0;
+/// Le carton « Fait avec VerdierCAM », à la fin de la vidéo avec vignette.
+pub const DUREE_CARTON: f64 = 2.0;
+pub const SUFFIXE_CARTON: &str = " carton de fin.png";
 
 pub use videos::chemin_derive;
 

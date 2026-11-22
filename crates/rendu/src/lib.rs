@@ -613,18 +613,33 @@ pub fn monter(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, su
     let montee = noyau::chemin_derive(video, noyau::SUFFIXE_MONTEE);
     let partiel = videos::chemin_partiel(&montee);
     let infos = sonder(&rendu)?;
-    let mut encodeur = lancer(&videos::commande_montage(&rendu, &png, &partiel, &infos), true)?;
+    // Le carton « Fait avec VerdierCAM », peint pour l'occasion et effacé après.
+    let carton = montage.reglages.carton_fin.then(|| noyau::chemin_derive(video, noyau::SUFFIXE_CARTON));
+    if let Some(c) = &carton {
+        composeur::vignette::carton_de_fin(&Polices::charger()).save_png(c).map_err(|e| Erreur(format!("Carton de fin non peint : {e}")))?;
+    }
+    let commande = videos::commande_montage(&rendu, &png, &partiel, &infos, carton.as_deref());
+    let encodeur = lancer(&commande, true);
+    let efface_carton = || {
+        if let Some(c) = &carton {
+            let _ = std::fs::remove_file(c);
+        }
+    };
+    let mut encodeur = encodeur.inspect_err(|_| efface_carton())?;
     drop(encodeur.stdin.take());
     while encodeur.try_wait().map_err(|e| Erreur(e.to_string()))?.is_none() {
         if suivi.arret.load(Ordering::Relaxed) {
             let _ = encodeur.kill();
             let _ = encodeur.wait();
             let _ = std::fs::remove_file(&partiel);
+            efface_carton();
             return Err(Erreur("Rendu arrêté.".into()));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let fin = encodeur.wait_with_output().map_err(|e| Erreur(e.to_string()))?;
+    let fin = encodeur.wait_with_output().map_err(|e| Erreur(e.to_string()));
+    efface_carton();
+    let fin = fin?;
     if !fin.status.success() {
         let _ = std::fs::remove_file(&partiel);
         return Err(Erreur(format!("Vignette non collée : {}", String::from_utf8_lossy(&fin.stderr).lines().last().unwrap_or("ffmpeg"))));

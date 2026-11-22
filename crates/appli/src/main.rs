@@ -12,6 +12,7 @@
 // s'appuie sur enregistreur.rs, commun et essayé sous Linux).
 #[cfg_attr(windows, path = "capture_windows.rs")]
 mod capture;
+mod aide;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod enregistreur;
 mod etat;
@@ -241,6 +242,9 @@ struct Monteur {
     /// Le modèle des sous-titres en train d'arriver, et la boîte qui le propose.
     telechargement: Option<telechargement::Telechargement>,
     ouvrir_modele: bool,
+    /// Les boîtes de l'aide.
+    ouvrir_ce_qu_il_faut: bool,
+    ouvrir_a_propos: bool,
     /// Windows : la fenêtre à filmer, choisie dans la boîte du Monteur.
     #[cfg(windows)]
     choix_fenetre: Option<capture::ChoixFenetre>,
@@ -389,6 +393,9 @@ impl Monteur {
             capture_simple: false,
             telechargement: None,
             ouvrir_modele: false,
+            // Un déroulé d'essai n'en veut pas : la boîte cacherait la fenêtre.
+            ouvrir_ce_qu_il_faut: aide::a_montrer_au_lancement() && std::env::var_os("MONTEUR2_SCENARIO").is_none(),
+            ouvrir_a_propos: false,
             #[cfg(windows)]
             choix_fenetre: None,
             #[cfg(windows)]
@@ -1665,6 +1672,10 @@ impl Monteur {
                 change |= ui.checkbox("Mettre le réglage en lumière", &mut r.mettre_en_lumiere);
                 change |= ui.checkbox("Montrer les sous-titres", &mut r.montrer_sous_titres);
                 change |= ui.checkbox("Incruster les sous-titres dans l'image", &mut r.incruster_sous_titres);
+                change |= ui.checkbox("Carton « Fait avec VerdierCAM » à la fin", &mut r.carton_fin);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("2 s à la fin de la vidéo avec vignette, au rendu : le logo, « Fait avec VerdierCAM », verdiercam.fr.");
+                }
                 let mut fondu = r.fondu as f32;
                 ui.set_next_item_width(120.0);
                 if ui.slider_f32("Fondu aux coupes (s)", &mut fondu, 0.0, 1.0) {
@@ -2008,6 +2019,21 @@ impl Application for Monteur {
                 }
                 m.end();
             }
+            if let Some(m) = ui.begin_menu("Aide") {
+                if ui.menu_item("Ce qu'il faut…") {
+                    self.ouvrir_ce_qu_il_faut = true;
+                }
+                if ui.menu_item("Mode d'emploi")
+                    && let Err(e) = aide::ouvrir_le_mode_d_emploi()
+                {
+                    self.message = format!("Mode d'emploi non ouvert : {e}");
+                }
+                ui.separator();
+                if ui.menu_item("À propos du Monteur VerdierCAM") {
+                    self.ouvrir_a_propos = true;
+                }
+                m.end();
+            }
             barre.end();
         }
 
@@ -2102,6 +2128,8 @@ impl Application for Monteur {
         self.boite_projet(ui);
         self.boite_corbeille(ui);
         self.boite_modele(ui);
+        self.boite_ce_qu_il_faut(ui);
+        self.boite_a_propos(ui);
         self.suivre_telechargement();
         #[cfg(windows)]
         self.boite_fenetre(ui);
@@ -2226,7 +2254,7 @@ fn main() {
         }
     };
     let config = AppConfig {
-        window_title: "Monteur 2".to_string(),
+        window_title: "Monteur VerdierCAM".to_string(),
         window_size: (1640.0, 1000.0),
         present_mode: wgpu::PresentMode::Fifo,
         clear_color: charte::c(charte::BG_CANVAS),

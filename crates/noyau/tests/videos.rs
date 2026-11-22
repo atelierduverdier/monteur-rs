@@ -108,8 +108,14 @@ fn ffprobe_et_montage_comme_le_monteur1() {
             Path::new("/t/vignette.png"),
             Path::new("/v/x avec vignette.partiel.mp4"),
             &infos,
+            None,
         );
         assert_eq!(json(cmd), attendu["montage"], "montage {nom}");
+        // Avec le carton : trois morceaux, le carton en queue, du silence sous lui s'il y a du son.
+        let avec = videos::commande_montage(Path::new("/v/x.mp4"), Path::new("/t/v.png"), Path::new("/v/s.mp4"), &infos, Some(Path::new("/t/carton.png"))).join(" ");
+        assert!(avec.contains("concat=n=3"), "{avec}");
+        assert!(avec.contains("-t 2.0 -f image2 -pattern_type none -i /t/carton.png"), "{avec}");
+        assert_eq!(avec.contains("[v2][4:a]"), infos.son, "{avec}");
         let av: Vec<_> = ["out_time_us=1500000", "out_time_us=999999999999", "frame=12", " out_time_us=42"]
             .iter()
             .map(|l| videos::avancement_montage(l, &infos))

@@ -7,6 +7,7 @@
 #
 # DOSSIER reçoit a.png, b.png ; chaque `nom:délai` capture après ce délai, le précédent compris.
 # PRISES : un dossier de prises jetable. Écran 1640 × 1060 ; spectacle lance la capture.
+# MONTEUR2_PROGRAMME remplace le programme essayé (l'AppImage de dist/, par exemple).
 set -u
 D=$1; PRISES=$2; SC=$3; shift 3
 ICI=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,7 +20,7 @@ python3 -c "import time;time.sleep(3)"
 # héritent du vrai écran, et le dialogue de fichiers du Monteur s'ouvrait sur le bureau (22/11/2026).
 dbus-update-activation-environment WAYLAND_DISPLAY="$D/run/t" DISPLAY= 2>/dev/null
 WAYLAND_DISPLAY="$D/run/t" DISPLAY= XDG_DATA_HOME="$D/donnees" MONTEUR2_PROJETS="$D/projets" MONTEUR2_SCENARIO="$SC" \
-    "$ICI/target/release/monteur2" "$PRISES" >"$D/app.log" 2>&1 &
+    APPIMAGE_EXTRACT_AND_RUN=1 "${MONTEUR2_PROGRAMME:-$ICI/target/release/monteur2}" "$PRISES" >"$D/app.log" 2>&1 &
 A=$!
 for s in "$@"; do
     python3 -c "import time;time.sleep(${s#*:})"

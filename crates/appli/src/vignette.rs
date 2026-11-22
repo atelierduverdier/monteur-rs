@@ -3,7 +3,7 @@
 //! vidéo. Une vignette faite ou retouchée ailleurs n'est pas remplacée sans confirmation.
 
 use std::time::Instant;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 use composeur::police::Polices;
@@ -39,6 +39,29 @@ pub struct Vignette {
     saisie: Option<([f32; 2], [i64; 4])>,
     /// Une vignette vient d'être écrite : la fiche et la liste sont à mettre à jour.
     pub ecrite: bool,
+    /// Le nom et le logo du bandeau, gardés pour toutes les prises (`marque.json`, à côté des fiches).
+    marque: vignette::Marque,
+    nom_marque: String,
+    logo_marque: Option<PathBuf>,
+    logo_choisi: Option<Receiver<Option<PathBuf>>>,
+}
+
+fn chemin_marque() -> PathBuf {
+    noyau::systeme::donnees().join("marque.json")
+}
+
+/// La marque gardée : nom et chemin du logo ; VerdierCAM sinon.
+fn lire_marque() -> (vignette::Marque, Option<PathBuf>) {
+    let lu = std::fs::read_to_string(chemin_marque()).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let nom = lu.as_ref().and_then(|v| v.get("nom")?.as_str().map(str::to_string)).filter(|n| !n.trim().is_empty());
+    let logo = lu.as_ref().and_then(|v| v.get("logo")?.as_str().map(PathBuf::from));
+    match nom {
+        None => (vignette::Marque::default(), None),
+        Some(nom) => {
+            let image = logo.as_ref().and_then(|l| Pixmap::load_png(l).ok());
+            (vignette::Marque { nom, logo: image }, logo)
+        }
+    }
 }
 
 pub fn cadre_de(fiche: &Fiche) -> Option<[i64; 4]> {
@@ -88,7 +111,25 @@ fn en_jpeg(image: &Pixmap, qualite: u8) -> Result<Vec<u8>, String> {
 
 impl Vignette {
     pub fn new() -> Self {
-        Self { tete: None, bouge: None, vu_a: None, texture: None, source: None, recu: None, sale: true, pixmap: None, confirmer: false, saisie: None, ecrite: false }
+        let (marque, logo_marque) = lire_marque();
+        let nom_marque = marque.nom.clone();
+        Self {
+            tete: None,
+            bouge: None,
+            vu_a: None,
+            texture: None,
+            source: None,
+            recu: None,
+            sale: true,
+            pixmap: None,
+            confirmer: false,
+            saisie: None,
+            ecrite: false,
+            marque,
+            nom_marque,
+            logo_marque,
+            logo_choisi: None,
+        }
     }
 
     /// Une autre prise : on repart de l'image de sa fiche.
@@ -144,7 +185,7 @@ impl Vignette {
             if let (Some(s), None) = (source, fiche.cadre.as_ref()) {
                 poser_cadre(fiche, videos::cadre_defaut(s.width() as i64, s.height() as i64));
             }
-            let image = vignette::vignette(fiche, source.map(|s| s.as_ref()), cadre_de(fiche), polices);
+            let image = vignette::vignette_a_la_marque(fiche, source.map(|s| s.as_ref()), cadre_de(fiche), polices, &self.marque);
             self.envoyer(gpu, &image);
             self.pixmap = Some(image);
             self.sale = false;
@@ -283,6 +324,7 @@ impl Vignette {
             for (champ, trop) in vignette::debordements(fiche, polices) {
                 ui.text_colored(charte::c(charte::ERREUR), format!("{champ} : {trop} pixels de trop, il mord sur l'image"));
             }
+            self.panneau_marque(ui, message);
             ui.separator();
             let png = noyau::chemin_derive(video, noyau::SUFFIXE_PNG);
             let texte = if self.confirmer { "Remplacer la vignette" } else { "Écrire la vignette" };
@@ -297,6 +339,59 @@ impl Vignette {
             ui.text_colored(charte::c(charte::UNIT), "Glisser l'image déplace le cadrage ; la molette resserre.");
         });
         change
+    }
+
+    /// La chaîne : son nom et son logo en haut du bandeau, à la place de ceux de VerdierCAM.
+    fn panneau_marque(&mut self, ui: &Ui, message: &mut String) {
+        if let Some(r) = &self.logo_choisi
+            && let Ok(choix) = r.try_recv()
+        {
+            self.logo_choisi = None;
+            if let Some(chemin) = choix {
+                match Pixmap::load_png(&chemin) {
+                    Ok(image) => {
+                        self.marque.logo = Some(image);
+                        self.logo_marque = Some(chemin);
+                        self.garder_marque(message);
+                    }
+                    Err(e) => *message = format!("Logo illisible (un PNG est attendu) : {e}"),
+                }
+            }
+        }
+        if !ui.collapsing_header("Chaîne", dear_imgui_rs::TreeNodeFlags::empty()) {
+            return;
+        }
+        ui.text_colored(charte::c(charte::TEXT_2), "Le nom et le logo du haut du bandeau, pour toutes les prises.");
+        ui.set_next_item_width(-1.0);
+        if ui.input_text("##marque", &mut self.nom_marque).build() && !self.nom_marque.trim().is_empty() {
+            self.marque.nom = self.nom_marque.trim().to_string();
+            self.garder_marque(message);
+        }
+        if ui.button("Logo…") && self.logo_choisi.is_none() {
+            let (envoi, recu) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = envoi.send(crate::choisir_un_fichier(&noyau::systeme::maison(), "Le logo de la chaîne (PNG)", ("Images PNG", &["png", "PNG"])));
+            });
+            self.logo_choisi = Some(recu);
+        }
+        ui.same_line();
+        if ui.button("Revenir à VerdierCAM") {
+            self.marque = vignette::Marque::default();
+            self.nom_marque = self.marque.nom.clone();
+            self.logo_marque = None;
+            let _ = std::fs::remove_file(chemin_marque());
+            self.sale = true;
+        }
+    }
+
+    fn garder_marque(&mut self, message: &mut String) {
+        self.sale = true;
+        let valeur = serde_json::json!({ "nom": self.marque.nom, "logo": self.logo_marque.as_ref().map(|l| l.to_string_lossy().into_owned()) });
+        let chemin = chemin_marque();
+        let ecrit = chemin.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&chemin, valeur.to_string()));
+        if let Err(e) = ecrit {
+            *message = format!("Chaîne non gardée : {e}");
+        }
     }
 
     fn ecrire(&mut self, fiche: &mut Fiche, video: &Path, png: &Path) -> String {
