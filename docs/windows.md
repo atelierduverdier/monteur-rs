@@ -62,6 +62,32 @@ réserve 16 Go, n'a ni lecteur CD ni agent invité : le zip y entre par le rése
 où l'on veut, double-cliquer `monteur2.exe`, puis : ouvrir une prise OBS, Préparer, poser un zoom, écrire la
 vignette, Voix › écouter avant/après, Rendre, mettre une prise à la corbeille, Ouvrir le dossier.
 
-**Pas encore sous Windows** : Filmer (gpu-screen-recorder, lot 3), les sous-titres et l'envoi (whisper-cli et
-youtube-envoi, lot 4), le nanoKONTROL2 et le raccourci global. Le `.exe` n'a pas encore d'icône et n'est pas
-signé : SmartScreen avertira au premier lancement d'un zip téléchargé (VerdierCAM signe les siens).
+**Pas encore sous Windows** : les sous-titres et l'envoi (whisper-cli et youtube-envoi, lot 4), le nanoKONTROL2.
+Le `.exe` n'a pas encore d'icône et n'est pas signé : SmartScreen avertira au premier lancement d'un zip téléchargé
+(VerdierCAM signe les siens).
+
+## Filmer sous Windows (lot 3, 22/11/2026)
+
+Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Windows.Graphics.Capture (crate
+`windows-capture`), `enregistreur.rs` fait la prise. Ce que ça donne :
+
+- **La fenêtre** se choisit dans la boîte « Quelle fenêtre filmer ? » (titre et programme). Filmer la garde
+  (`fenetre-capture`, à côté des fiches) ; Fichier › Filmer une autre fenêtre l'oublie ; Enregistrement simple la
+  redemande à chaque fois. **Filmer VerdierCAM** lance VerdierCAM et filme sa fenêtre (`VerdierCAM.exe`) dès qu'elle
+  s'ouvre, sans rien demander ; 40 s sans fenêtre, il abandonne.
+- **L'image** : celle de la fenêtre même quand une autre passe devant, avec le pointeur, sans le cadre jaune
+  (Windows 11 ; Windows 10 le dessine). Recadrée sur la zone cliente, sans barre de titre : c'est là que VerdierCAM
+  note ses gestes. 30 i/s fixes : la dernière image est reprise tant que la fenêtre ne bouge pas, et le nombre
+  d'images suit l'horloge. Une fenêtre redimensionnée se pose en haut à gauche du cadre de la première image.
+- **L'encodage** : ffmpeg, par son entrée standard ; NVENC, AMF ou Quick Sync si la carte graphique sait faire (une
+  image d'essai le dit), x264 « veryfast » sinon.
+- **Le son** : le bureau (WASAPI en « loopback », par cpal) et le micro, chacun dans un WAV avec l'instant de son
+  premier échantillon. À l'arrêt, ffmpeg les cale sur la première image et les mêle, le micro des deux côtés.
+- **Le décompte** se joue avant la première image : la fenêtre est déjà choisie. **Windows+F12** arrête
+  (`RegisterHotKey`). Fermer le Monteur en filmant termine la prise.
+
+Essayé ici : 6 contrôles d'`enregistreur.rs` sous Linux, dont une vraie prise de 2 s par une source factice
+(60 images, nom d'OBS, rien qui traîne), un mélange réel (une piste stéréo, 2 s) et le calage (saboté : il
+rougit). La boîte du choix s'affiche sous Wine. **La capture elle-même ne s'essaie que sur un vrai Windows**
+(Wine n'a pas Windows.Graphics.Capture) : filmer VerdierCAM 30 s, vérifier que les zooms de Préparer tombent sur
+les clics, que la voix est calée sur les lèvres, et que l'image est nette.

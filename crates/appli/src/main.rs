@@ -8,7 +8,12 @@
 // monteur2-plantages.log) ; la version de mise au point la garde.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+// Filmer : gpu-screen-recorder sous Linux (capture.rs), la capture de Windows ailleurs (capture_windows.rs, qui
+// s'appuie sur enregistreur.rs, commun et essayé sous Linux).
+#[cfg_attr(windows, path = "capture_windows.rs")]
 mod capture;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod enregistreur;
 mod etat;
 mod ligne;
 mod midi;
@@ -231,6 +236,12 @@ struct Monteur {
     ouvrir_corbeille: bool,
     /// Un enregistrement simple : il finit dans Copies d'écran, sans toucher au travail en cours.
     capture_simple: bool,
+    /// Windows : la fenêtre à filmer, choisie dans la boîte du Monteur.
+    #[cfg(windows)]
+    choix_fenetre: Option<capture::ChoixFenetre>,
+    /// Windows : quand VerdierCAM a été lancé pour être filmé ; sa fenêtre est attendue.
+    #[cfg(windows)]
+    verdiercam_lance: Option<std::time::Instant>,
     /// La prise tout juste filmée : Préparer se lance dès qu'elle est ouverte.
     a_preparer: Option<PathBuf>,
     /// Le panneau Texte : ce qu'on y cherche, et la phrase que la lecture y a amenée.
@@ -286,8 +297,9 @@ fn chemin_voix() -> PathBuf {
     chemin_fiches().with_file_name("voix.json")
 }
 
+/// Linux : où le portail garde la fenêtre choisie. Windows : la fenêtre gardée par Filmer (programme et titre).
 fn chemin_jeton_portail() -> PathBuf {
-    chemin_fiches().with_file_name("portail-capture")
+    chemin_fiches().with_file_name(if cfg!(windows) { "fenetre-capture" } else { "portail-capture" })
 }
 
 /// Le niveau du micro : vert, orange près de saturer, rouge saturé.
@@ -370,6 +382,10 @@ impl Monteur {
             raccourci: None,
             midi,
             capture_simple: false,
+            #[cfg(windows)]
+            choix_fenetre: None,
+            #[cfg(windows)]
+            verdiercam_lance: None,
             a_jeter: None,
             ouvrir_corbeille: false,
             a_preparer: None,
@@ -682,8 +698,16 @@ impl Monteur {
             Ok(_) => {
                 if self.capture.is_none() {
                     self.capture_prevue = Some(std::time::Instant::now() + DELAI_VERDIERCAM);
+                    #[cfg(windows)]
+                    {
+                        self.verdiercam_lance = Some(std::time::Instant::now());
+                    }
                 }
-                "VerdierCAM lancé, ses gestes sont notés. L'enregistrement va demander sa fenêtre.".into()
+                if cfg!(windows) {
+                    "VerdierCAM lancé, ses gestes sont notés. L'enregistrement commence dès que sa fenêtre s'ouvre.".into()
+                } else {
+                    "VerdierCAM lancé, ses gestes sont notés. L'enregistrement va demander sa fenêtre.".into()
+                }
             }
             Err(e) => format!("VerdierCAM n'a pas pu être lancé : {e}"),
         };
@@ -752,6 +776,7 @@ impl Monteur {
         self.lancer_capture(true);
     }
 
+    #[cfg(not(windows))]
     fn lancer_capture(&mut self, simple: bool) {
         if self.capture.is_some() {
             return;
@@ -781,7 +806,10 @@ impl Monteur {
         }
         if self.capture_prevue.is_some_and(|t| std::time::Instant::now() >= t) {
             self.capture_prevue = None;
+            #[cfg(not(windows))]
             self.filmer_ecran();
+            #[cfg(windows)]
+            self.attendre_verdiercam();
         }
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
@@ -802,6 +830,119 @@ impl Monteur {
             capture::Fin::Annulee => "Enregistrement annulé.".into(),
             capture::Fin::Erreur(e) => e,
         };
+    }
+
+    /// Filmer reprend la fenêtre gardée ; un enregistrement simple, ou rien de gardé : la boîte du choix.
+    #[cfg(windows)]
+    fn lancer_capture(&mut self, simple: bool) {
+        if self.capture.is_some() || self.choix_fenetre.is_some() {
+            return;
+        }
+        let jeton = chemin_jeton_portail();
+        match (!simple).then(|| capture::fenetre_gardee(&jeton)).flatten() {
+            Some(f) => self.commencer_capture(&f, simple),
+            None => {
+                self.choix_fenetre = Some(capture::ChoixFenetre::nouveau(simple, Some(&jeton)));
+                self.message = "Choisis la fenêtre à filmer.".into();
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn commencer_capture(&mut self, fenetre: &capture::Fenetre, simple: bool) {
+        let dossier = if simple { self.copies.clone() } else { self.dossier.chemin.clone() };
+        match capture::lancer(&dossier, fenetre, !simple) {
+            Ok(c) => {
+                if !simple {
+                    capture::garder(&chemin_jeton_portail(), fenetre);
+                }
+                self.capture = Some(c);
+                self.capture_simple = simple;
+                self.message = format!("On filme « {} ».", fenetre.titre);
+                self.raccourci.get_or_insert_with(raccourci::lancer);
+            }
+            Err(e) => self.message = e,
+        }
+    }
+
+    /// Filmer VerdierCAM sous Windows : sa fenêtre est filmée dès qu'elle s'ouvre, sans rien demander.
+    #[cfg(windows)]
+    fn attendre_verdiercam(&mut self) {
+        let programme = noyau::systeme::verdiercam().file_name().map_or_else(|| "VerdierCAM.exe".to_string(), |n| n.to_string_lossy().into_owned());
+        match capture::fenetre_du_programme(&programme) {
+            Some(f) => {
+                self.verdiercam_lance = None;
+                self.commencer_capture(&f, false);
+            }
+            None if self.verdiercam_lance.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(40)) => {
+                self.verdiercam_lance = None;
+                self.message = "La fenêtre de VerdierCAM ne s'est pas ouverte : rien n'est filmé.".into();
+            }
+            None => self.capture_prevue = Some(std::time::Instant::now() + std::time::Duration::from_millis(500)),
+        }
+    }
+
+    /// La boîte « Quelle fenêtre filmer ? » (Windows) : les fenêtres ouvertes, leur programme.
+    #[cfg(windows)]
+    fn boite_fenetre(&mut self, ui: &Ui) {
+        const TITRE: &str = "Quelle fenêtre filmer ?";
+        let Some(choix) = &mut self.choix_fenetre else { return };
+        if !choix.ouverte {
+            ui.open_popup(TITRE);
+            choix.ouverte = true;
+        }
+        let mut filmer = None;
+        if let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() {
+            ui.text_wrapped(if choix.simple {
+                "Enregistrement simple : la fenêtre se choisit à chaque fois, la vidéo va dans Copies d'écran."
+            } else {
+                "Le Monteur garde ce choix. Fichier › Filmer une autre fenêtre pour en changer."
+            });
+            ui.spacing();
+            ui.child_window("fenetres").size([680.0, 320.0]).border(true).build(ui, || {
+                for (i, f) in choix.fenetres.iter().enumerate() {
+                    if ui.selectable_config(format!("{}   ·   {}##f{i}", f.titre, f.programme)).selected(choix.choisie == Some(i)).build() {
+                        choix.choisie = Some(i);
+                    }
+                    if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left) {
+                        choix.choisie = Some(i);
+                        filmer = Some(true);
+                    }
+                }
+                if choix.fenetres.is_empty() {
+                    ui.text_colored(charte::c(charte::TEXT_2), "Aucune fenêtre à filmer : ouvre-la, puis Actualiser.");
+                }
+            });
+            if ui.button_with_size("Filmer##fenetre", [140.0, 30.0]) && choix.choisie.is_some() {
+                filmer = Some(true);
+            }
+            ui.same_line();
+            if ui.button_with_size("Actualiser", [120.0, 30.0]) {
+                choix.rafraichir();
+            }
+            ui.same_line();
+            if ui.button_with_size("Annuler##fenetre", [100.0, 30.0]) {
+                filmer = Some(false);
+            }
+            if filmer.is_some() {
+                ui.close_current_popup();
+            }
+            boite.end();
+        }
+        match filmer {
+            Some(true) => {
+                if let Some(c) = self.choix_fenetre.take()
+                    && let Some(f) = c.choisie.and_then(|i| c.fenetres.get(i)).cloned()
+                {
+                    self.commencer_capture(&f, c.simple);
+                }
+            }
+            Some(false) => {
+                self.choix_fenetre = None;
+                self.message = "Rien n'est filmé.".into();
+            }
+            None => {}
+        }
     }
 
     /// Le dialogue de fichiers, en fond ; rend le fichier choisi, `None` à l'abandon.
@@ -1894,6 +2035,8 @@ impl Application for Monteur {
         }
         self.boite_projet(ui);
         self.boite_corbeille(ui);
+        #[cfg(windows)]
+        self.boite_fenetre(ui);
         if self.fenetre_rendre {
             let mut ouverte = true;
             ui.window("Rendre le montage###rendre").opened(&mut ouverte).size([940.0, 640.0], Condition::FirstUseEver).build(|| self.panneau_rendre(ui));

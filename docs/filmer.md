@@ -1,5 +1,8 @@
 # Filmer sans OBS (05/11/2026)
 
+Sous Linux, ci-dessous. Sous Windows, une autre capture, même résultat : [windows.md](windows.md), « Filmer sous
+Windows ».
+
 Bouton **Filmer…** du ruban : le Monteur lance `gpu-screen-recorder`, qui passe par le portail de
 KDE, le même dialogue qu'OBS pour choisir la fenêtre. Le choix est gardé dans
 `~/.local/share/monteur/portail-capture` ; Fichier › Filmer une autre fenêtre l'oublie.

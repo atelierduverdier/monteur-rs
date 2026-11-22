@@ -1,6 +1,6 @@
 //! Un raccourci valable partout pour arrêter de filmer : le portail GlobalShortcuts de KDE. Il ne
-//! se demande qu'au premier enregistrement, KDE fait alors confirmer la touche. Sous Linux
-//! seulement pour l'instant : Windows aura le sien avec sa capture.
+//! se demande qu'au premier enregistrement, KDE fait alors confirmer la touche. Sous Windows, la
+//! même touche (Windows+F12) par `RegisterHotKey`.
 
 use std::sync::mpsc::{self, Receiver};
 #[cfg(target_os = "linux")]
@@ -46,10 +46,33 @@ async fn ecouter(envoi: &Sender<Evenement>) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows : la touche appartient au fil qui l'enregistre, ses appuis arrivent dans sa file de messages.
+#[cfg(windows)]
+pub fn lancer() -> Receiver<Evenement> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, MOD_WIN, RegisterHotKey, VK_F12};
+    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+    let (envoi, recu) = mpsc::channel();
+    std::thread::spawn(move || {
+        // SAFETY : un raccourci et une file de messages propres à ce fil.
+        if let Err(e) = unsafe { RegisterHotKey(None, 1, MOD_WIN | MOD_NOREPEAT, VK_F12.0 as u32) } {
+            let _ = envoi.send(Evenement::Echec(format!("Windows+F12 est déjà pris ({e})")));
+            return;
+        }
+        let _ = envoi.send(Evenement::Pret);
+        let mut message = MSG::default();
+        while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
+            if message.message == WM_HOTKEY && envoi.send(Evenement::Appui).is_err() {
+                break;
+            }
+        }
+    });
+    recu
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn lancer() -> Receiver<Evenement> {
     let (envoi, recu) = mpsc::channel();
-    let _ = envoi.send(Evenement::Echec("pas encore de raccourci global sur ce système".into()));
+    let _ = envoi.send(Evenement::Echec("pas de raccourci global sur ce système".into()));
     recu
 }
 

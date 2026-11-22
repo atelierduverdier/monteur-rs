@@ -195,9 +195,153 @@ where
         .ok()
 }
 
+/// Un WAV en 16 bits, écrit au fil de l'eau : l'entête porte des tailles provisoires, remises à la fin.
+pub struct EcrivainWav {
+    fichier: std::io::BufWriter<std::fs::File>,
+    octets: u64,
+}
+
+impl EcrivainWav {
+    pub fn creer(chemin: &std::path::Path, frequence: u32, canaux: u16) -> std::io::Result<Self> {
+        use std::io::Write;
+        let mut fichier = std::io::BufWriter::new(std::fs::File::create(chemin)?);
+        let par_image = canaux as u32 * 2;
+        fichier.write_all(b"RIFF\0\0\0\0WAVEfmt ")?;
+        fichier.write_all(&16u32.to_le_bytes())?;
+        fichier.write_all(&1u16.to_le_bytes())?; // PCM
+        fichier.write_all(&canaux.to_le_bytes())?;
+        fichier.write_all(&frequence.to_le_bytes())?;
+        fichier.write_all(&(frequence * par_image).to_le_bytes())?;
+        fichier.write_all(&(par_image as u16).to_le_bytes())?;
+        fichier.write_all(&16u16.to_le_bytes())?;
+        fichier.write_all(b"data\0\0\0\0")?;
+        Ok(Self { fichier, octets: 0 })
+    }
+
+    pub fn ecrire(&mut self, echantillons: &[i16]) -> std::io::Result<()> {
+        use std::io::Write;
+        for e in echantillons {
+            self.fichier.write_all(&e.to_le_bytes())?;
+        }
+        self.octets += echantillons.len() as u64 * 2;
+        Ok(())
+    }
+
+    /// Les vraies tailles dans l'entête. Au-delà de 4 Gio (6 h de stéréo à 48 kHz), elles plafonnent.
+    pub fn finir(mut self) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let data = self.octets.min(u32::MAX as u64 - 36) as u32;
+        self.fichier.seek(SeekFrom::Start(4))?;
+        self.fichier.write_all(&(data + 36).to_le_bytes())?;
+        self.fichier.seek(SeekFrom::Start(40))?;
+        self.fichier.write_all(&data.to_le_bytes())?;
+        self.fichier.flush()
+    }
+}
+
+/// Une piste son enregistrée pour une prise : le micro, ou le son du bureau (Windows seulement, par le mode
+/// « loopback » de WASAPI). Les échantillons partent du fil de la carte son vers un fil qui écrit le WAV : le fil de
+/// la carte ne touche jamais au disque.
+pub struct PisteSon {
+    flux: Option<cpal::Stream>,
+    debut: Arc<Mutex<Option<Instant>>>,
+    fil: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    pub chemin: std::path::PathBuf,
+    pub canaux: u16,
+}
+
+/// Ce qu'une piste finie laisse : son WAV, l'instant de son premier échantillon, ses canaux.
+pub struct PisteFinie {
+    pub chemin: std::path::PathBuf,
+    pub debut: Option<Instant>,
+    pub canaux: u16,
+}
+
+impl PisteSon {
+    /// Le micro par défaut. `None` sans micro.
+    pub fn micro(chemin: &std::path::Path) -> Option<Self> {
+        let entree = cpal::default_host().default_input_device()?;
+        Self::lancer(entree, chemin, false)
+    }
+
+    /// Le son du bureau. Sous Windows, une sortie ouverte en entrée s'écoute (WASAPI) ; ailleurs, `None` : sous Linux,
+    /// le « default » d'ALSA donnerait le micro à la place.
+    pub fn bureau(chemin: &std::path::Path) -> Option<Self> {
+        if !cfg!(windows) {
+            return None;
+        }
+        let sortie = cpal::default_host().default_output_device()?;
+        Self::lancer(sortie, chemin, true)
+    }
+
+    /// `sortie` : une sortie écoutée (le bureau) ; sa configuration de sortie est celle qu'on enregistre.
+    fn lancer(appareil: cpal::Device, chemin: &std::path::Path, sortie: bool) -> Option<Self> {
+        let config = if sortie { appareil.default_output_config() } else { appareil.default_input_config() }.ok()?;
+        let canaux = config.channels();
+        let mut wav = EcrivainWav::creer(chemin, config.sample_rate(), canaux).ok()?;
+        let (envoi, recu) = std::sync::mpsc::channel::<Vec<i16>>();
+        let debut = Arc::new(Mutex::new(None));
+        let d = debut.clone();
+        let rappel = move |donnees: &[f32], info: &cpal::InputCallbackInfo| {
+            if let Ok(mut d) = d.lock()
+                && d.is_none()
+            {
+                // L'instant du premier échantillon : celui de l'appel, moins ce que la carte a gardé.
+                let ts = info.timestamp();
+                *d = Some(Instant::now() - ts.callback.duration_since(ts.capture));
+            }
+            let _ = envoi.send(donnees.iter().map(|e| (e.clamp(-1.0, 1.0) * 32767.0) as i16).collect());
+        };
+        let flux = appareil.build_input_stream(config.into(), rappel, |e| eprintln!("enregistrement du son : {e}"), None).ok()?;
+        flux.play().ok()?;
+        let fil = std::thread::Builder::new()
+            .name("écriture du son".into())
+            .spawn(move || {
+                for paquet in recu {
+                    wav.ecrire(&paquet)?;
+                }
+                wav.finir()
+            })
+            .ok()?;
+        Some(Self { flux: Some(flux), debut, fil: Some(fil), chemin: chemin.to_path_buf(), canaux })
+    }
+
+    /// Arrête la carte, attend que le WAV soit écrit en entier.
+    pub fn finir(mut self) -> Result<PisteFinie, String> {
+        // Le flux lâché, l'envoi part avec lui : le fil d'écriture voit la fin.
+        drop(self.flux.take());
+        let ecrit = self.fil.take().map(|f| f.join().map_err(|_| "le fil d'écriture du son s'est arrêté".to_string()));
+        match ecrit {
+            Some(Ok(Err(e))) => return Err(format!("{} : {e}", self.chemin.display())),
+            Some(Err(e)) => return Err(e),
+            _ => {}
+        }
+        let debut = self.debut.lock().ok().and_then(|d| *d);
+        Ok(PisteFinie { chemin: self.chemin.clone(), debut, canaux: self.canaux })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn un_wav_lisible() {
+        let d = std::env::temp_dir().join(format!("monteur-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("essai.wav");
+        let mut w = EcrivainWav::creer(&f, 48000, 2).unwrap();
+        w.ecrire(&vec![1000i16; 2 * 4800]).unwrap();
+        w.finir().unwrap();
+        let o = std::fs::read(&f).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(o.len(), 44 + 2 * 4800 * 2);
+        assert_eq!(&o[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(o[4..8].try_into().unwrap()) as usize, o.len() - 8);
+        assert_eq!(u32::from_le_bytes(o[40..44].try_into().unwrap()) as usize, o.len() - 44);
+        assert_eq!(u16::from_le_bytes(o[22..24].try_into().unwrap()), 2, "deux canaux");
+        assert_eq!(u32::from_le_bytes(o[24..28].try_into().unwrap()), 48000);
+    }
 
     #[test]
     fn cretes() {
