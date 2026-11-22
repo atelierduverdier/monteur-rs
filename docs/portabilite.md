@@ -40,5 +40,4 @@ pas de console (`windows_subsystem`) ; les plantages vont dans `monteur2-plantag
 - `voir-fenetre.sh` donne désormais l'écran du KWin virtuel aux services lancés par D-Bus : avant,
   le portail héritait du vrai écran, et ce dialogue s'est ouvert une fois sur le bureau de Christophe.
 
-**Pas essayé** : la compilation pour Windows, qui demande la chaîne de VerdierCAM et la cible Rust
-de Windows (lot 2).
+**Lot 2, la compilation pour Windows** : faite le même jour, voir [windows.md](windows.md).

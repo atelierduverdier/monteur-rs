@@ -168,14 +168,23 @@ impl Bande {
         let ips = (nombre as f64 / duree.max(0.1)).max(1e-3);
         let (envoi, recu) = mpsc::channel();
         std::thread::spawn(move || {
-            // Les images clés suffisent : une bande n'a pas besoin de l'instant exact.
-            let sortie = noyau::systeme::commande("ffmpeg")
-                .args(["-v", "error", "-skip_frame", "nokey", "-i"])
-                .arg(&video)
-                .args(["-vf", &format!("fps={ips:.6},scale=-2:54,tile={colonnes}x{rangees}"), "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
-                .output()
-                .ok();
-            let _ = envoi.send(sortie.and_then(|s| tiny_skia::Pixmap::decode_png(&s.stdout).ok()));
+            let bande = |cles_seules: bool| {
+                let mut c = noyau::systeme::commande("ffmpeg");
+                c.args(["-v", "error"]);
+                if cles_seules {
+                    c.args(["-skip_frame", "nokey"]);
+                }
+                let sortie = c
+                    .arg("-i")
+                    .arg(&video)
+                    .args(["-vf", &format!("fps={ips:.6},scale=-2:54,tile={colonnes}x{rangees}"), "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
+                    .output()
+                    .ok();
+                sortie.and_then(|s| tiny_skia::Pixmap::decode_png(&s.stdout).ok())
+            };
+            // Les images clés suffisent : une bande n'a pas besoin de l'instant exact. Mais une vidéo qui n'en a
+            // qu'une ne donne rien au FFmpeg 9.0 (celui de Windows, 22/11/2026) : alors toutes les images.
+            let _ = envoi.send(bande(true).or_else(|| bande(false)));
         });
         Self { recu: Some(recu), texture: None, colonnes, rangees, nombre }
     }

@@ -17,7 +17,8 @@ target/release/monteur2
 
 Voir [docs/etape-3.md](docs/etape-3.md) pour ce que la fenêtre sait faire, et
 [docs/nanokontrol2.md](docs/nanokontrol2.md) pour le nanoKONTROL2. Ce qui change d'un système à
-l'autre (Linux, Windows) passe par `noyau::systeme` : [docs/portabilite.md](docs/portabilite.md).
+l'autre (Linux, Windows) passe par `noyau::systeme` : [docs/portabilite.md](docs/portabilite.md). La version
+Windows se construit ici : `outils/construire-windows.sh` ([docs/windows.md](docs/windows.md)).
 
 ## Construire
 
