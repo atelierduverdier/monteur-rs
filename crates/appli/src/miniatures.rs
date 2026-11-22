@@ -2,7 +2,6 @@
 //! une prise après l'autre) pour que la fenêtre s'ouvre tout de suite.
 
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
 use dear_app::{ExternalTextureHandle, GpuApi};
@@ -34,14 +33,14 @@ pub struct Miniatures {
 }
 
 fn sonder(chemin: &PathBuf) -> Recu {
-    let duree = Command::new("ffprobe")
+    let duree = noyau::systeme::commande("ffprobe")
         .args(noyau::videos::commande_sonder(chemin).into_iter().skip(1))
         .output()
         .ok()
         .and_then(|s| noyau::videos::lire_infos(&String::from_utf8_lossy(&s.stdout)).ok())
         .map(|i| i.duree);
     // Trois secondes après le début : la première image est souvent celle d'avant le geste.
-    let rgba = Command::new("ffmpeg")
+    let rgba = noyau::systeme::commande("ffmpeg")
         .args(["-v", "error", "-ss", "3", "-i"])
         .arg(chemin)
         .args(["-frames:v", "1", "-vf", &format!("scale={LARGEUR}:{HAUTEUR}"), "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
@@ -170,7 +169,7 @@ impl Bande {
         let (envoi, recu) = mpsc::channel();
         std::thread::spawn(move || {
             // Les images clés suffisent : une bande n'a pas besoin de l'instant exact.
-            let sortie = Command::new("ffmpeg")
+            let sortie = noyau::systeme::commande("ffmpeg")
                 .args(["-v", "error", "-skip_frame", "nokey", "-i"])
                 .arg(&video)
                 .args(["-vf", &format!("fps={ips:.6},scale=-2:54,tile={colonnes}x{rangees}"), "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])

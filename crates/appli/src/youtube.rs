@@ -4,7 +4,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
@@ -101,7 +101,7 @@ pub fn envoyer(montee: &Path, video: &Path, d: &Description) -> Result<Envoi, St
     let description = std::env::temp_dir().join(format!("monteur2-description-{}.txt", std::process::id()));
     std::fs::write(&description, format!("{}\n", d.texte.trim())).map_err(|e| e.to_string())?;
     let cmd = videos::commande_envoi(montee, d, &description, jpg.exists().then_some(jpg.as_path()));
-    let mut enfant = Command::new(&cmd[0])
+    let mut enfant = noyau::systeme::commande(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

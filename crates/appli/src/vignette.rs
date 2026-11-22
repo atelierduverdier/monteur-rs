@@ -57,10 +57,33 @@ fn extraire(video: &Path, t: f64, duree: f64) -> Receiver<Option<Pixmap>> {
     let (envoi, recu) = mpsc::channel();
     let cmd = videos::commande_image(video, t, Some(duree));
     std::thread::spawn(move || {
-        let sortie = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output().ok();
+        let sortie = noyau::systeme::commande(&cmd[0]).args(&cmd[1..]).output().ok();
         let _ = envoi.send(sortie.and_then(|s| Pixmap::decode_png(&s.stdout).ok()));
     });
     recu
+}
+
+/// L'image posée sur du blanc, en RGB : les pixels de tiny-skia sont prémultipliés, le blanc passe
+/// donc là où l'image est transparente (ce que faisait `magick -background white -flatten`).
+fn a_plat_sur_blanc(rgba_premultiplie: &[u8]) -> Vec<u8> {
+    rgba_premultiplie
+        .chunks_exact(4)
+        .flat_map(|p| {
+            let fond = 255 - p[3];
+            [p[0].saturating_add(fond), p[1].saturating_add(fond), p[2].saturating_add(fond)]
+        })
+        .collect()
+}
+
+/// La vignette en JPEG. Comme ImageMagick : à partir de 90, les couleurs ne sont pas
+/// sous-échantillonnées (le texte reste net) ; en dessous, en 4:2:0.
+fn en_jpeg(image: &Pixmap, qualite: u8) -> Result<Vec<u8>, String> {
+    let (l, h) = (u16::try_from(image.width()).map_err(|e| e.to_string())?, u16::try_from(image.height()).map_err(|e| e.to_string())?);
+    let mut sortie = Vec::new();
+    jpeg_encoder::Encoder::new(&mut sortie, qualite)
+        .encode(&a_plat_sur_blanc(image.data()), l, h, jpeg_encoder::ColorType::Rgb)
+        .map_err(|e| e.to_string())?;
+    Ok(sortie)
 }
 
 impl Vignette {
@@ -300,22 +323,12 @@ impl Vignette {
         if let Err(e) = image.save_png(&png_p) {
             return format!("Vignette non écrite : {e}");
         }
-        let qualite = |q: u32| {
-            std::process::Command::new("magick")
-                .arg(&png_p)
-                .args(["-background", "white", "-flatten", "-quality", &q.to_string()])
-                .arg(&jpg_p)
-                .status()
-                .is_ok_and(|s| s.success())
-        };
         // YouTube refuse une vignette de plus de 2 Mio.
-        let mut fait = qualite(92);
-        if fait && std::fs::metadata(&jpg_p).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
-            fait = qualite(80);
-        }
-        if !fait {
+        let jpeg = en_jpeg(image, 92).and_then(|j| if j.len() > 2 * 1024 * 1024 { en_jpeg(image, 80) } else { Ok(j) });
+        if let Err(e) = jpeg.and_then(|j| std::fs::write(&jpg_p, j).map_err(|e| e.to_string())) {
             let _ = std::fs::remove_file(&png_p);
-            return "JPG non écrit (magick).".into();
+            let _ = std::fs::remove_file(&jpg_p);
+            return format!("JPG non écrit : {e}");
         }
         if let Err(e) = std::fs::rename(&png_p, png).and_then(|_| std::fs::rename(&jpg_p, &jpg)) {
             return format!("Vignette non posée à côté de la vidéo : {e}");
@@ -341,5 +354,27 @@ impl Vignette {
         if let Some(p) = &self.pixmap {
             let _ = p.save_png(chemin);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn le_transparent_devient_blanc() {
+        // Opaque rouge, transparent, demi-transparent noir (prémultiplié : 0, alpha 128).
+        let rgb = a_plat_sur_blanc(&[255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 128]);
+        assert_eq!(rgb, vec![255, 0, 0, 255, 255, 255, 127, 127, 127]);
+    }
+
+    #[test]
+    fn un_jpeg_entier() {
+        let mut p = Pixmap::new(1280, 720).unwrap();
+        p.fill(tiny_skia::Color::from_rgba8(0x1E, 0x1E, 0x1E, 255));
+        let j = en_jpeg(&p, 92).unwrap();
+        assert_eq!(&j[..2], &[0xFF, 0xD8], "début d'un JPEG");
+        assert_eq!(&j[j.len() - 2..], &[0xFF, 0xD9], "fin d'un JPEG");
+        assert!(en_jpeg(&p, 80).unwrap().len() <= j.len());
     }
 }

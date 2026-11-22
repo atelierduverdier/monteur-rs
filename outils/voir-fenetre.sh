@@ -15,6 +15,9 @@ XDG_RUNTIME_DIR="$D/run" kwin_wayland --virtual --no-lockscreen --no-global-shor
     --width 1640 --height 1060 >"$D/kwin.log" 2>&1 &
 K=$!
 python3 -c "import time;time.sleep(3)"
+# Les services que D-Bus lance (le portail et ses dialogues) s'affichent dans ce KWin : sinon ils
+# héritent du vrai écran, et le dialogue de fichiers du Monteur s'ouvrait sur le bureau (22/11/2026).
+dbus-update-activation-environment WAYLAND_DISPLAY="$D/run/t" DISPLAY= 2>/dev/null
 WAYLAND_DISPLAY="$D/run/t" DISPLAY= XDG_DATA_HOME="$D/donnees" MONTEUR2_PROJETS="$D/projets" MONTEUR2_SCENARIO="$SC" \
     "$ICI/target/release/monteur2" "$PRISES" >"$D/app.log" 2>&1 &
 A=$!

@@ -17,11 +17,11 @@ use crate::{
 };
 
 pub fn dossier_defaut() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join("Vidéos").join("Copies d'écran")
+    crate::systeme::videos().join("Copies d'écran")
 }
 
 pub fn rangement_defaut() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join("Vidéos").join("YouTube")
+    crate::systeme::videos().join("YouTube")
 }
 
 /// `Path.stem` de Python : le nom sans sa dernière extension.
@@ -411,9 +411,8 @@ pub fn programme_envoi() -> String {
     {
         return force;
     }
-    let chemin = std::env::var_os("PATH").into_iter().flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).map(|d| d.join("youtube-envoi")).find(|p| p.is_file());
-    chemin
-        .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".local/bin/youtube-envoi"))
+    crate::systeme::trouver_programme("youtube-envoi")
+        .unwrap_or_else(|| crate::systeme::maison().join(".local/bin/youtube-envoi"))
         .to_string_lossy()
         .into_owned()
 }

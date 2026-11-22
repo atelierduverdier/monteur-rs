@@ -41,7 +41,7 @@ colore et reste en vue. Une phrase déjà dans une autre coupe se reprend dans l
 
 **À l'arrêt**, la prise s'ouvre et Préparer se lance seul.
 
-**Vu-mètre** à côté du bouton Arrêter : `parec` lit le micro à part, jusqu'à la saturation en rouge ;
+**Vu-mètre** à côté du bouton Arrêter : le micro par défaut est lu à part (cpal, `media::sons`), jusqu'à la saturation en rouge ;
 « Micro muet ? » au bout de 5 s sous −45 dB.
 
 **Décompte** : à la première image, l'enregistrement se met en pause (SIGUSR2) le temps de trois bips,
@@ -56,6 +56,8 @@ au premier enregistrement. Le portail refuse une appli sans identité : `outils/
 ## Effacer une prise
 
 Clic droit dans la liste, ou Fichier › Mettre la prise à la corbeille : une confirmation donne tous
-les fichiers qui partent avec elle (`fichiers_lies`), puis `gio trash`. Jamais de suppression
-définitive. Refusé pendant un rendu ou un envoi. `gio trash` refuse `/tmp` : essai sur `/home`.
+les fichiers qui partent avec elle (`fichiers_lies`), puis la corbeille du système (crate `trash`,
+celle de KDE sous Linux, celle de Windows sous Windows). Jamais de suppression définitive. Refusé
+pendant un rendu ou un envoi. Le déroulé d'essai pose `XDG_DATA_HOME` : la corbeille est alors celle
+du dossier jetable, pas la vraie.
 

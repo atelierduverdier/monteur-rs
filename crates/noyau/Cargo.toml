@@ -10,3 +10,4 @@ description = "Le cœur du Monteur, sans interface : montage, projet, fiches, jo
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "7"

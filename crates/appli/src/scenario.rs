@@ -80,7 +80,7 @@ impl Scenario {
                     }
                 }),
                 "projet" => m.ranger_dans_un_projet(&mots[1..].join(" ")),
-                // `inserer <fichier|dessus|intercalee> …` : le dialogue de KDE ne se pilote pas.
+                // `inserer <fichier|dessus|intercalee> …` : le dialogue de fichiers ne se pilote pas.
                 "inserer" => {
                     let par_dessus = mots.get(1) == Some(&"dessus");
                     let source = std::path::PathBuf::from(mots[3..].join(" "));

@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use alsa::seq::{Addr, ClientIter, EvCtrl, EventType, PortCap, PortIter, PortSubscribe, PortType, Seq};
 use noyau::arrondi::arrondi;
 use noyau::montage::{FACTEUR_MAX, FACTEUR_MIN};
@@ -30,6 +31,7 @@ const FIN_DE_GESTE: Duration = Duration::from_millis(800);
 /// La navette ne déplace pas la tête plus souvent : chaque saut décode une image.
 const NAVETTE_SAUT: Duration = Duration::from_millis(80);
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Evenement {
     Branche(String),
     Debranche,
@@ -280,6 +282,7 @@ fn repetition(a: Action) -> Option<Duration> {
 
 // --- Le fil qui écoute ALSA ---
 
+#[cfg(target_os = "linux")]
 fn relier(seq: &Seq, de: Addr, vers: Addr) -> alsa::Result<()> {
     let s = PortSubscribe::empty()?;
     s.set_sender(de);
@@ -288,6 +291,7 @@ fn relier(seq: &Seq, de: Addr, vers: Addr) -> alsa::Result<()> {
 }
 
 /// Le premier port qu'on peut écouter dont le client ou le port porte ce nom, hors du Monteur.
+#[cfg(target_os = "linux")]
 fn trouver(seq: &Seq, appareil: &str, moi: i32) -> Option<(Addr, String)> {
     let voulu = appareil.to_lowercase();
     for client in ClientIter::new(seq) {
@@ -306,6 +310,7 @@ fn trouver(seq: &Seq, appareil: &str, moi: i32) -> Option<(Addr, String)> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn ecouter(envoi: &Sender<Evenement>, appareil: &str) -> Result<(), String> {
     let texte = |e: alsa::Error| e.to_string();
     let seq = Seq::open(None, Some(alsa::Direction::Capture), false).map_err(texte)?;
@@ -349,6 +354,13 @@ fn ecouter(envoi: &Sender<Evenement>, appareil: &str) -> Result<(), String> {
             return Ok(());
         }
     }
+}
+
+/// Ailleurs que sous Linux, pas encore de surface MIDI : le fil s'arrête sans rien dire, la
+/// fenêtre fait comme si aucun appareil n'était branché.
+#[cfg(not(target_os = "linux"))]
+fn ecouter(_envoi: &Sender<Evenement>, _appareil: &str) -> Result<(), String> {
+    Ok(())
 }
 
 // --- Ce que la fenêtre en garde ---

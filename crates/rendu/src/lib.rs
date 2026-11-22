@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -195,7 +195,7 @@ fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[
     let avant = nettoyage.as_ref().map(|f| format!("{f},")).unwrap_or_default();
     let graphe = format!("{};[a]{avant}loudnorm={}:print_format=json[mesure]", graphe_son(retire, clips, fondus), voix.cible());
     cmd.extend([s("-filter_complex"), graphe, s("-map"), s("[mesure]"), s("-f"), s("null"), s("-")]);
-    let sortie = Command::new("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok();
+    let sortie = noyau::systeme::commande("ffmpeg").args(&cmd).stdin(Stdio::null()).output().ok();
     let niveau = sortie.and_then(|o| filtre_depuis_mesure(&String::from_utf8_lossy(&o.stderr), voix));
     match (avant.is_empty(), niveau) {
         (_, None) => nettoyage,
@@ -232,7 +232,7 @@ pub struct Extrait {
 }
 
 fn ffmpeg_extrait(video: &Path, debut: f64, duree: f64, filtre: Option<&str>, sortie: &[&str]) -> Option<std::process::Output> {
-    let mut c = Command::new("ffmpeg");
+    let mut c = noyau::systeme::commande("ffmpeg");
     c.args(["-hide_banner", "-nostats", "-ss", &format!("{debut:.3}"), "-t", &format!("{duree:.3}"), "-i"]).arg(video).arg("-vn");
     if let Some(f) = filtre {
         c.args(["-af", f]);
@@ -269,7 +269,7 @@ pub fn avant_apres(video: &Path, debut: f64, duree: f64, voix: &Voix) -> Option<
 }
 
 fn lancer(cmd: &[String], entree: bool) -> Result<Child, Erreur> {
-    Command::new(&cmd[0])
+    noyau::systeme::commande(&cmd[0])
         .args(&cmd[1..])
         .stdin(if entree { Stdio::piped() } else { Stdio::null() })
         .stdout(if entree { Stdio::null() } else { Stdio::piped() })
@@ -659,13 +659,14 @@ fn ecrire_srt(chemin: &Path, montage: &Montage, decalage: f64, compte: &mut Stri
 
 pub fn sonder(video: &Path) -> Result<Infos, Erreur> {
     let cmd = videos::commande_sonder(video);
-    let sortie = Command::new(&cmd[0]).args(&cmd[1..]).output().map_err(|e| Erreur(format!("ffprobe : {e}")))?;
+    let sortie = noyau::systeme::commande(&cmd[0]).args(&cmd[1..]).output().map_err(|e| Erreur(format!("ffprobe : {e}")))?;
     videos::lire_infos(&String::from_utf8_lossy(&sortie.stdout))
 }
 
 #[cfg(test)]
 mod tests_volume {
     use super::*;
+    use std::process::Command;
 
     /// Une coupe entre un plan rouge et un plan bleu : mêmes images au total, et les deux couleurs
     /// mêlées au raccord.

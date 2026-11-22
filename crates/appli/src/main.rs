@@ -4,6 +4,10 @@
 //!
 //! `monteur2 [dossier]` : sans dossier, celui des fiches du Monteur 1, sinon « Copies d'écran ».
 
+// Sous Windows, pas de console noire derrière la fenêtre (les plantages vont dans
+// monteur2-plantages.log) ; la version de mise au point la garde.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod capture;
 mod etat;
 mod ligne;
@@ -240,9 +244,10 @@ struct Monteur {
     envoi: Option<youtube::Envoi>,
     /// Quand on a regardé le dossier pour la dernière fois.
     regarde: std::time::Instant,
-    /// Une prise ou un fichier projet choisis dans le dialogue de KDE.
-    prise_choisie: Option<Receiver<String>>,
-    projet_choisi: Option<Receiver<String>>,
+    /// Une prise, un fichier projet ou VerdierCAM, choisis dans le dialogue de fichiers.
+    prise_choisie: Option<Receiver<Option<PathBuf>>>,
+    projet_choisi: Option<Receiver<Option<PathBuf>>>,
+    verdiercam_choisi: Option<Receiver<Option<PathBuf>>>,
     /// Une vidéo qu'on importe, en fond : son chemin relatif, sa durée, par-dessus ?, l'instant.
     import: Option<Receiver<Result<Option<(String, f64, bool, f64)>, String>>>,
     /// Un déroulé d'essai (`MONTEUR2_SCENARIO`), sinon rien.
@@ -255,6 +260,23 @@ fn dossier_de_depart(fiches: &Fiches) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| fiches.dossier.clone())
         .unwrap_or_else(noyau::videos::dossier_defaut)
+}
+
+/// Ce que le dialogue de fichiers montre : un nom et des extensions (aucune : tout).
+type Filtre = (&'static str, &'static [&'static str]);
+const FILTRE_VIDEOS: Filtre = ("Vidéos", &["mp4", "mkv", "mov", "MP4", "MKV", "MOV"]);
+const FILTRE_PROJETS: Filtre = ("Projets du Monteur", &["monteur"]);
+/// Sous Linux, VerdierCAM est une AppImage ou le programme d'une archive, sans extension.
+const FILTRE_VERDIERCAM: Filtre = if cfg!(windows) { ("VerdierCAM", &["exe"]) } else { ("", &[]) };
+
+/// Le dialogue de fichiers du système : celui du portail sous Linux (sous KDE, le même que
+/// kdialog), celui de Windows sous Windows. Il attend le choix : à lancer hors de la fenêtre.
+fn choisir_un_fichier(depart: &Path, titre: &str, (nom, extensions): Filtre) -> Option<PathBuf> {
+    let mut d = rfd::FileDialog::new().set_title(titre).set_directory(depart);
+    if !extensions.is_empty() {
+        d = d.add_filter(nom, extensions);
+    }
+    d.pick_file()
 }
 
 /// Le temps laissé à VerdierCAM pour ouvrir sa fenêtre : le dialogue ne liste que celles qui existent.
@@ -290,10 +312,7 @@ fn chrono_court(s: f64) -> String {
 }
 
 fn chemin_fiches() -> PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".local/share"))
-        .join("monteur/fiches.json")
+    noyau::systeme::donnees().join("fiches.json")
 }
 
 impl Monteur {
@@ -364,6 +383,7 @@ impl Monteur {
             regarde: std::time::Instant::now(),
             prise_choisie: None,
             projet_choisi: None,
+            verdiercam_choisi: None,
             import: None,
             scenario: scenario::Scenario::depuis_l_environnement(),
         }
@@ -385,13 +405,7 @@ impl Monteur {
     /// La prise ouverte part dans le projet `nom`, avec tout ce qui l'accompagne.
     /// Le dossier affiché, dans le gestionnaire de fichiers.
     fn ouvrir_le_dossier(&mut self) {
-        let lance = std::process::Command::new("xdg-open")
-            .arg(&self.dossier.chemin)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Err(e) = lance {
+        if let Err(e) = opener::open(&self.dossier.chemin) {
             self.message = format!("Dossier non ouvert : {e}");
         }
     }
@@ -645,16 +659,20 @@ impl Monteur {
 
     /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera.
     fn filmer(&mut self) {
-        let programme = std::env::var_os("MONTEUR_VERDIERCAM")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join("VerdierCAM/programmes/VerdierCAM.AppImage"));
+        let programme = noyau::systeme::verdiercam();
         if !programme.exists() {
-            self.message = format!("VerdierCAM est introuvable : {}", programme.display());
+            if std::env::var_os("MONTEUR_VERDIERCAM").is_some() {
+                self.message = format!("VerdierCAM est introuvable : {}", programme.display());
+            } else {
+                // Il ne sera plus demandé : le choix est noté à côté des fiches.
+                self.message = "VerdierCAM est introuvable : montre-moi où il est.".into();
+                self.verdiercam_choisi = Some(Self::dialogue(noyau::systeme::maison(), "Où est VerdierCAM ?", FILTRE_VERDIERCAM));
+            }
             return;
         }
         let gestes = chemin_fiches().with_file_name("gestes");
         let _ = std::fs::create_dir_all(&gestes);
-        let lance = std::process::Command::new(&programme)
+        let lance = noyau::systeme::commande(&programme)
             .env("VCAM_JOURNAL_VIDEO", &gestes)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -786,12 +804,11 @@ impl Monteur {
         };
     }
 
-    /// Le dialogue de fichiers de KDE, en fond ; rend le chemin choisi (vide : abandon).
-    fn dialogue(depart: PathBuf, filtre: &'static str) -> Receiver<String> {
+    /// Le dialogue de fichiers, en fond ; rend le fichier choisi, `None` à l'abandon.
+    fn dialogue(depart: PathBuf, titre: &'static str, filtre: Filtre) -> Receiver<Option<PathBuf>> {
         let (envoi, recu) = mpsc::channel();
         std::thread::spawn(move || {
-            let sortie = std::process::Command::new("kdialog").arg("--getopenfilename").arg(&depart).arg(filtre).output();
-            let _ = envoi.send(sortie.map(|s| String::from_utf8_lossy(&s.stdout).trim().to_string()).unwrap_or_default());
+            let _ = envoi.send(choisir_un_fichier(&depart, titre, filtre));
         });
         recu
     }
@@ -816,7 +833,7 @@ impl Monteur {
         }
     }
 
-    /// Choisit une vidéo (dialogue de KDE), la copie dans le projet et la pose à la tête.
+    /// Choisit une vidéo, la copie dans le projet et la pose à la tête.
     fn inserer_une_video(&mut self, par_dessus: bool) {
         let Some(p) = &self.prise else { return };
         if !p.dossier().starts_with(&self.racine) {
@@ -824,16 +841,14 @@ impl Monteur {
             return;
         }
         let (dossier, t) = (p.dossier().to_path_buf(), p.lecteur.position());
-        let depart = std::env::home_dir().unwrap_or_default().join("Vidéos");
+        let depart = noyau::systeme::videos();
         let (envoi, recu) = mpsc::channel();
         std::thread::spawn(move || {
-            let choix = std::process::Command::new("kdialog")
-                .arg("--getopenfilename")
-                .arg(&depart)
-                .arg("Vidéos (*.mp4 *.mkv *.mov *.MP4 *.MOV)")
-                .output();
-            let chemin = choix.map(|s| String::from_utf8_lossy(&s.stdout).trim().to_string()).unwrap_or_default();
-            let _ = envoi.send(if chemin.is_empty() { Ok(None) } else { importer(&PathBuf::from(chemin), &dossier, par_dessus, t).map(Some) });
+            let choix = choisir_un_fichier(&depart, "Insérer une vidéo", FILTRE_VIDEOS);
+            let _ = envoi.send(match choix {
+                Some(chemin) => importer(&chemin, &dossier, par_dessus, t).map(Some),
+                None => Ok(None),
+            });
         });
         self.import = Some(recu);
         self.message = "Choisis la vidéo à insérer…".into();
@@ -961,8 +976,12 @@ impl Monteur {
         }
         drop(largeur);
         // Où c'est sur le disque : le projet est un dossier, on doit pouvoir le retrouver.
-        let maison = std::env::home_dir().unwrap_or_default();
-        let lieu = self.dossier.chemin.strip_prefix(&maison).map_or(self.dossier.chemin.display().to_string(), |r| format!("~/{}", r.display()));
+        // `~` ne dit rien sous Windows : le chemin entier.
+        let maison = noyau::systeme::maison();
+        let lieu = match self.dossier.chemin.strip_prefix(&maison) {
+            Ok(r) if !cfg!(windows) => format!("~/{}", r.display()),
+            _ => self.dossier.chemin.display().to_string(),
+        };
         {
             let _gris = ui.push_style_color(StyleColor::Text, charte::c(charte::UNIT));
             ui.text_wrapped(&lieu);
@@ -1176,7 +1195,7 @@ impl Monteur {
         boite.end();
     }
 
-    /// Jamais de suppression définitive : `gio trash`, récupérable dans la corbeille de KDE.
+    /// Jamais de suppression définitive : la corbeille du système (crate `trash`), récupérable.
     fn mettre_a_la_corbeille(&mut self, video: &Path) {
         if self.rendu.is_some() || self.envoi.is_some() {
             self.message = "Un rendu ou un envoi est en cours : attends sa fin.".into();
@@ -1192,11 +1211,10 @@ impl Monteur {
             self.vue.oublier_source();
         }
         let fichiers = noyau::videos::fichiers_lies(video);
-        let sortie = std::process::Command::new("gio").arg("trash").arg("--").args(&fichiers).stdin(std::process::Stdio::null()).output();
+        let sortie = trash::delete_all(&fichiers);
         self.a_changer = Some(self.dossier.chemin.clone());
         self.message = match sortie {
-            Ok(s) if s.status.success() => format!("{} fichier(s) à la corbeille : {}.", fichiers.len(), video.file_name().unwrap_or_default().to_string_lossy()),
-            Ok(s) => format!("Corbeille impossible : {}", String::from_utf8_lossy(&s.stderr).trim()),
+            Ok(()) => format!("{} fichier(s) à la corbeille : {}.", fichiers.len(), video.file_name().unwrap_or_default().to_string_lossy()),
             Err(e) => format!("Corbeille impossible : {e}"),
         };
     }
@@ -1565,11 +1583,11 @@ impl Application for Monteur {
             self.lancer_suivant();
         }
         if let Some(r) = &self.prise_choisie
-            && let Ok(chemin) = r.try_recv()
+            && let Ok(choix) = r.try_recv()
         {
             self.prise_choisie = None;
-            if !chemin.is_empty() {
-                match noyau::videos::deplacer(&mut self.fiches, &chemin_fiches(), &PathBuf::from(&chemin), &self.dossier.chemin.clone()) {
+            if let Some(chemin) = choix {
+                match noyau::videos::deplacer(&mut self.fiches, &chemin_fiches(), &chemin, &self.dossier.chemin.clone()) {
                     Ok(v) => {
                         self.a_changer = Some(self.dossier.chemin.clone());
                         self.a_ouvrir = Some(v);
@@ -1579,11 +1597,27 @@ impl Application for Monteur {
             }
         }
         if let Some(r) = &self.projet_choisi
-            && let Ok(chemin) = r.try_recv()
+            && let Ok(choix) = r.try_recv()
         {
             self.projet_choisi = None;
-            if !chemin.is_empty() {
-                self.ouvrir_fichier_projet(PathBuf::from(chemin));
+            if let Some(chemin) = choix {
+                self.ouvrir_fichier_projet(chemin);
+            }
+        }
+        if let Some(r) = &self.verdiercam_choisi
+            && let Ok(choix) = r.try_recv()
+        {
+            self.verdiercam_choisi = None;
+            match choix {
+                Some(chemin) => {
+                    let note = noyau::systeme::chemin_verdiercam_choisi();
+                    let ecrit = note.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&note, chemin.to_string_lossy().as_bytes()));
+                    if let Err(e) = ecrit {
+                        eprintln!("{} : {e}", note.display());
+                    }
+                    self.filmer();
+                }
+                None => self.message = "VerdierCAM n'a pas été choisi : rien n'est lancé.".into(),
             }
         }
         if let Some(d) = self.a_changer.take() {
@@ -1689,13 +1723,13 @@ impl Application for Monteur {
                     }
                     ui.separator();
                     if ui.menu_item("Un fichier .monteur…") {
-                        self.projet_choisi = Some(Self::dialogue(self.racine.clone(), "Projets du Monteur (*.monteur)"));
+                        self.projet_choisi = Some(Self::dialogue(self.racine.clone(), "Ouvrir un projet", FILTRE_PROJETS));
                     }
                     o.end();
                 }
                 let dans_projet = self.dossier.chemin.starts_with(&self.racine);
                 if ui.menu_item_enabled_selected_no_shortcut("Ajouter une prise au projet…", false, dans_projet) {
-                    self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Vidéos (*.mp4 *.mkv *.mov)"));
+                    self.prise_choisie = Some(Self::dialogue(self.copies.clone(), "Ajouter une prise au projet", FILTRE_VIDEOS));
                 }
                 if ui.menu_item_enabled_selected_no_shortcut("Fermer le projet", false, dans_projet) {
                     self.fermer_projet();

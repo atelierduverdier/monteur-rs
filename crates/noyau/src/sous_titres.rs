@@ -21,7 +21,7 @@ pub const SRT_COURT: f64 = 0.3;
 
 /// Les modèles de la dictée, déjà sur ce poste.
 pub fn modeles() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join(".local/share/dictee/modeles")
+    crate::systeme::dossier_donnees().join("dictee/modeles")
 }
 
 pub fn commande_son_16k(video: &Path, wav: &Path) -> Vec<String> {

@@ -8,11 +8,10 @@
 //! Dès la première image, l'enregistrement se met en pause le temps de trois bips : la prise démarre
 //! trois secondes après le choix de la fenêtre, sans que le décompte soit filmé.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -24,7 +23,7 @@ const SEUIL_MUET: f32 = -45.0;
 
 pub struct Capture {
     enfant: Child,
-    micro: Option<Micro>,
+    micro: Option<media::sons::Micro>,
     /// La pause du décompte : son début, et ce qu'elle a duré une fois finie.
     decompte: Option<Instant>,
     decale: f64,
@@ -50,83 +49,6 @@ pub enum Fin {
     Erreur(String),
 }
 
-/// Le crête d'un paquet de son s16le, en dB.
-pub fn pic_db(octets: &[u8]) -> f32 {
-    let pic = octets.chunks_exact(2).map(|o| i16::from_le_bytes([o[0], o[1]]).unsigned_abs()).max().unwrap_or(0);
-    20.0 * (pic.max(1) as f32 / 32768.0).log10()
-}
-
-/// Le niveau du micro pendant qu'on filme : une lecture à part, sans lien avec la vidéo.
-struct Micro {
-    enfant: Child,
-    pic: Arc<AtomicU32>,
-    dernier_son: Arc<Mutex<Instant>>,
-}
-
-impl Micro {
-    fn lancer() -> Option<Self> {
-        let mut enfant = Command::new("parec")
-            .args(["--device=@DEFAULT_SOURCE@", "--format=s16le", "--rate=16000", "--channels=2", "--latency-msec=50", "--raw"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let mut flux = enfant.stdout.take()?;
-        let pic = Arc::new(AtomicU32::new((-90.0f32).to_bits()));
-        let dernier_son = Arc::new(Mutex::new(Instant::now()));
-        let (p, d) = (pic.clone(), dernier_son.clone());
-        std::thread::spawn(move || {
-            let mut paquet = [0u8; 3200]; // 50 ms
-            while flux.read_exact(&mut paquet).is_ok() {
-                let db = pic_db(&paquet);
-                // Monte tout de suite, redescend doucement : l'œil suit.
-                let avant = f32::from_bits(p.load(Ordering::Relaxed));
-                p.store(db.max(avant - 2.0).to_bits(), Ordering::Relaxed);
-                if db > SEUIL_MUET
-                    && let Ok(mut t) = d.lock()
-                {
-                    *t = Instant::now();
-                }
-            }
-        });
-        Some(Self { enfant, pic, dernier_son })
-    }
-}
-
-impl Drop for Micro {
-    fn drop(&mut self) {
-        let _ = self.enfant.kill();
-        let _ = self.enfant.wait();
-    }
-}
-
-/// Un bip court, en bruit de fond : il sert aux oreilles, l'œil est sur la fenêtre filmée.
-fn bip(hauteur: f64) {
-    let Ok(mut enfant) = Command::new("paplay")
-        .args(["--raw", "--format=s16le", "--rate=48000", "--channels=1"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return;
-    };
-    let n = 7200; // 150 ms
-    let son: Vec<u8> = (0..n)
-        .map(|i| {
-            let t = i as f64 / 48000.0;
-            let enveloppe = (std::f64::consts::PI * i as f64 / n as f64).sin();
-            ((2.0 * std::f64::consts::PI * hauteur * t).sin() * enveloppe * 9000.0) as i16
-        })
-        .flat_map(i16::to_le_bytes)
-        .collect();
-    if let Some(mut e) = enfant.stdin.take() {
-        let _ = e.write_all(&son);
-    }
-    let _ = enfant.wait();
-}
-
 fn signal(enfant: &Child, nom: &str) {
     let _ = Command::new("kill").arg(nom).arg(enfant.id().to_string()).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
@@ -143,7 +65,7 @@ const GRAPHE_SON: &str = "[0:a:1]pan=stereo|c0=c0+c1|c1=c0+c1[voix];[0:a:0][voix
 
 /// Une piste son stéréo à partir des deux : la vidéo est recopiée telle quelle.
 fn meler_le_son(brut: &Path, sortie: &Path) -> Result<(), String> {
-    let s = Command::new("ffmpeg")
+    let s = noyau::systeme::commande("ffmpeg")
         .args(["-v", "error", "-y", "-i"])
         .arg(brut)
         .args(["-filter_complex", GRAPHE_SON, "-map", "0:v", "-map", "[son]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"])
@@ -166,7 +88,7 @@ impl Capture {
     pub fn lancer(dossier: &Path, jeton: Option<&Path>, avec_decompte: bool) -> Result<Self, String> {
         let programme = std::env::var_os("MONTEUR2_ECRAN").unwrap_or_else(|| "gpu-screen-recorder".into());
         let partiel = dossier.join(format!("capture {}.partiel.mp4", noyau::maintenant().replace([':', '/'], "-")));
-        let mut commande = Command::new(&programme);
+        let mut commande = noyau::systeme::commande(&programme);
         commande
             .args(["-w", "portal", "-f", "30", "-cursor", "yes", "-c", "mp4", "-ac", "aac", "-ab", "192"])
             .args(["-a", "default_output", "-a", "default_input"])
@@ -197,7 +119,7 @@ impl Capture {
                 }
             });
         }
-        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: Micro::lancer(), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, arret: None, relances: 0, fini: false, derniere_ligne, travail: None })
+        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: media::sons::Micro::lancer(SEUIL_MUET), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, arret: None, relances: 0, fini: false, derniere_ligne, travail: None })
     }
 
     /// Les secondes filmées ; `None` tant que la fenêtre n'est pas choisie.
@@ -207,12 +129,12 @@ impl Capture {
 
     /// Le crête du micro, en dB.
     pub fn niveau(&self) -> Option<f32> {
-        self.micro.as_ref().map(|m| f32::from_bits(m.pic.load(Ordering::Relaxed)))
+        self.micro.as_ref().map(media::sons::Micro::niveau)
     }
 
     /// Le micro ne donne plus rien depuis 5 s.
     pub fn micro_muet(&self) -> bool {
-        self.micro.as_ref().is_some_and(|m| m.dernier_son.lock().is_ok_and(|t| t.elapsed().as_secs_f64() > 5.0))
+        self.micro.as_ref().is_some_and(|m| m.muet_depuis() > Duration::from_secs(5))
     }
 
     /// Les secondes qu'il reste avant de filmer pour de bon.
@@ -261,13 +183,7 @@ impl Capture {
         if self.avec_decompte && self.decompte.is_none() && !self.stoppee && horodatage_du(&self.partiel).exists() {
             signal(&self.enfant, "-USR2");
             self.decompte = Some(Instant::now());
-            std::thread::spawn(|| {
-                for hauteur in [660.0, 660.0, 990.0] {
-                    let depart = Instant::now();
-                    bip(hauteur);
-                    std::thread::sleep(Duration::from_secs(1).saturating_sub(depart.elapsed()));
-                }
-            });
+            std::thread::spawn(|| media::sons::jouer_des_bips(&[660.0, 660.0, 990.0]));
         }
         if let (None, Some(d)) = (self.debut, self.decompte)
             && d.elapsed().as_secs_f64() >= DECOMPTE
@@ -375,7 +291,7 @@ impl Drop for Capture {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -402,14 +318,5 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dossier);
         assert!(fin.is_some(), "l'enregistreur sourd tourne encore 15 s après « Arrêter »");
-    }
-
-    #[test]
-    fn crete_du_micro() {
-        assert_eq!(pic_db(&[]).round(), -90.0);
-        assert_eq!(pic_db(&[0, 0, 0, 0]).round(), -90.0);
-        assert_eq!(pic_db(&(-32768i16).to_le_bytes()).round(), 0.0);
-        let moitie = [1000i16.to_le_bytes(), 16384i16.to_le_bytes()].concat();
-        assert_eq!(pic_db(&moitie).round(), -6.0);
     }
 }

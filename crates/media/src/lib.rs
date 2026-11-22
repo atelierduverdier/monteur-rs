@@ -2,6 +2,7 @@
 //! un, les sauts de la tête de lecture.
 
 pub mod son;
+pub mod sons;
 pub mod video;
 
 use std::path::Path;

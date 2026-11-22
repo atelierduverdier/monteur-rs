@@ -1,9 +1,7 @@
 //! La fenêtre « Nettoyer la voix » : réglages valables pour toutes les prises, et écoute avant/après
 //! des 10 secondes autour de la tête de lecture.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -37,14 +35,11 @@ pub struct FenetreVoix {
     sons: Option<(Son, Son)>,
     calcul: Option<Receiver<Option<(Son, Son)>>>,
     a_refaire: Option<Instant>,
-    ecoute: Option<Child>,
+    ecoute: Option<media::sons::Ecoute>,
 }
 
-fn arreter(ecoute: &mut Option<Child>) {
-    if let Some(mut c) = ecoute.take() {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
+fn arreter(ecoute: &mut Option<media::sons::Ecoute>) {
+    ecoute.take();
 }
 
 impl Drop for FenetreVoix {
@@ -53,20 +48,9 @@ impl Drop for FenetreVoix {
     }
 }
 
-fn ecouter(pcm: &[u8]) -> Option<Child> {
-    let mut enfant = Command::new("paplay")
-        .args(["--raw", "--format=s16le", "--rate=48000", "--channels=2"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut entree = enfant.stdin.take()?;
-    let copie = pcm.to_vec();
-    std::thread::spawn(move || {
-        let _ = entree.write_all(&copie);
-    });
-    Some(enfant)
+/// Le passage à 48 kHz en stéréo, comme `rendu::avant_apres` le sort.
+fn ecouter(pcm: &[u8]) -> Option<media::sons::Ecoute> {
+    media::sons::Ecoute::lancer(pcm, 48000, 2)
 }
 
 fn onde(ui: &Ui, nom: &str, pics: Option<&[f32]>, couleur: u32) {

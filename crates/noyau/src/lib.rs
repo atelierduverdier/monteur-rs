@@ -15,6 +15,7 @@ pub mod prereglages;
 pub mod projet;
 pub mod projets;
 pub mod sous_titres;
+pub mod systeme;
 pub mod temps_morts;
 pub mod verrou;
 pub mod videos;

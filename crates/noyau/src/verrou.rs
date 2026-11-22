@@ -4,6 +4,10 @@
 //! nom du programme, machine, identifiant de la machine, identifiant du démarrage. Qt juge un verrou
 //! abandonné quand son processus est mort ou ne porte pas ce nom : le Monteur 1 respecte donc celui
 //! du Monteur 2, et inversement.
+//!
+//! Par-dessus, le Monteur 2 garde le fichier verrouillé par le système (`File::try_lock`) tant
+//! qu'il est ouvert. Sous Windows, où `/proc` n'existe pas, c'est ce qui dit qu'il tourne ; et un
+//! Monteur qui plante lâche ce verrou-là tout seul.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,6 +17,8 @@ use crate::Erreur;
 pub struct Verrou {
     chemin: PathBuf,
     contenu: String,
+    /// Le fichier ouvert et verrouillé : lâché avant de l'effacer.
+    fichier: Option<std::fs::File>,
 }
 
 fn lire_ligne(chemin: &str) -> String {
@@ -20,10 +26,30 @@ fn lire_ligne(chemin: &str) -> String {
 }
 
 /// Le nom du programme d'un processus vivant, `None` s'il est mort.
+#[cfg(target_os = "linux")]
 fn processus(pid: u32) -> Option<String> {
     let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
     let vivant = Path::new(&format!("/proc/{pid}")).exists();
     vivant.then(|| exe.and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default())
+}
+
+/// Ailleurs que sous Linux, le numéro ne dit rien : seul le verrou du système compte.
+#[cfg(not(target_os = "linux"))]
+fn processus(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Un autre programme ouvert (un autre Monteur 2) tient le fichier verrouillé.
+fn verrouille_ailleurs(chemin: &Path) -> bool {
+    let Ok(f) = std::fs::File::open(chemin) else { return false };
+    match f.try_lock() {
+        Ok(()) => {
+            let _ = f.unlock();
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(_) => false,
+    }
 }
 
 impl Verrou {
@@ -37,7 +63,7 @@ impl Verrou {
             let mut lignes = ancien.lines();
             let pid = lignes.next().and_then(|l| l.trim().parse::<u32>().ok());
             let nom = lignes.next().unwrap_or("").trim().to_string();
-            let tenu = pid.and_then(processus).is_some_and(|n| n.is_empty() || nom.is_empty() || n == nom);
+            let tenu = pid.and_then(processus).is_some_and(|n| n.is_empty() || nom.is_empty() || n == nom) || verrouille_ailleurs(chemin);
             if tenu && pid != Some(std::process::id()) {
                 return Err(Erreur("Le Monteur est déjà ouvert.".into()));
             }
@@ -60,12 +86,16 @@ impl Verrou {
             .open(chemin)
             .map_err(|_| Erreur("Le Monteur est déjà ouvert.".into()))?;
         f.write_all(contenu.as_bytes()).map_err(|e| Erreur(format!("{} : {e}", chemin.display())))?;
-        Ok(Self { chemin: chemin.to_path_buf(), contenu })
+        // Refusé (un système de fichiers sans verrous) : le contenu suffit sous Linux.
+        let _ = f.try_lock();
+        Ok(Self { chemin: chemin.to_path_buf(), contenu, fichier: Some(f) })
     }
 }
 
 impl Drop for Verrou {
     fn drop(&mut self) {
+        // Lâché d'abord : sous Windows, un fichier verrouillé ne se relit pas.
+        drop(self.fichier.take());
         // Seulement s'il est toujours le nôtre.
         if std::fs::read_to_string(&self.chemin).is_ok_and(|c| c == self.contenu) {
             let _ = std::fs::remove_file(&self.chemin);
@@ -83,6 +113,7 @@ mod tests {
         d.join("monteur.verrou")
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn pris_rendu_et_abandonne() {
         let chemin = jetable("cycle");
@@ -95,7 +126,7 @@ mod tests {
         assert!(!chemin.exists(), "rendu à la fermeture");
         // Un verrou d'un processus mort se reprend.
         std::fs::write(&chemin, "999999999\npython3.14\natomman\n").unwrap();
-        let _v = Verrou::prendre(&chemin).unwrap();
+        drop(Verrou::prendre(&chemin).unwrap());
         // Tenu par un processus vivant du bon nom : refusé.
         let mut enfant = std::process::Command::new("sleep").arg("5").spawn().unwrap();
         std::fs::write(&chemin, format!("{}\nsleep\natomman\n", enfant.id())).unwrap();
@@ -107,5 +138,31 @@ mod tests {
         let _ = enfant.kill();
         let _ = enfant.wait();
         let _ = std::fs::remove_dir_all(chemin.parent().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod tests_systeme {
+    use super::*;
+
+    /// Un autre Monteur 2 tient le fichier : refusé, quel que soit le numéro écrit dedans (sous
+    /// Windows, il ne dit rien). Lâché, parce qu'il s'est fermé ou a planté : repris.
+    #[test]
+    fn verrouille_par_un_autre_monteur() {
+        let d = std::env::temp_dir().join(format!("monteur-verrou-systeme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let chemin = d.join("monteur.verrou");
+        std::fs::write(&chemin, "999999999\nmonteur2\n").unwrap();
+        let autre = std::fs::File::open(&chemin).unwrap();
+        autre.try_lock().unwrap();
+        let e = Verrou::prendre(&chemin).err().expect("tenu par le système");
+        assert!(e.0.contains("déjà ouvert"));
+        drop(autre);
+        let v = Verrou::prendre(&chemin).unwrap();
+        assert!(verrouille_ailleurs(&chemin), "le Monteur ouvert tient son fichier");
+        drop(v);
+        assert!(!chemin.exists(), "rendu à la fermeture");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

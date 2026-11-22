@@ -1,21 +1,30 @@
 //! Un raccourci valable partout pour arrêter de filmer : le portail GlobalShortcuts de KDE. Il ne
-//! se demande qu'au premier enregistrement, KDE fait alors confirmer la touche.
+//! se demande qu'au premier enregistrement, KDE fait alors confirmer la touche. Sous Linux
+//! seulement pour l'instant : Windows aura le sien avec sa capture.
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
+#[cfg(target_os = "linux")]
+use std::sync::mpsc::Sender;
 
+#[cfg(target_os = "linux")]
 use ashpd::AppID;
+#[cfg(target_os = "linux")]
 use ashpd::desktop::global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut};
+#[cfg(target_os = "linux")]
 use futures_util::StreamExt;
 
 /// `LOGO` : la touche Windows. Ctrl+Alt+Fn changerait de console, et aucun logiciel filmé ne s'en sert.
+#[cfg(target_os = "linux")]
 const TOUCHE: &str = "LOGO+F12";
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Evenement {
     Pret,
     Appui,
     Echec(String),
 }
 
+#[cfg(target_os = "linux")]
 async fn ecouter(envoi: &Sender<Evenement>) -> Result<(), String> {
     let texte = |e: ashpd::Error| e.to_string();
     let id: AppID = "fr.atelierduverdier.Monteur2".try_into().map_err(|e: ashpd::Error| e.to_string())?;
@@ -37,6 +46,14 @@ async fn ecouter(envoi: &Sender<Evenement>) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn lancer() -> Receiver<Evenement> {
+    let (envoi, recu) = mpsc::channel();
+    let _ = envoi.send(Evenement::Echec("pas encore de raccourci global sur ce système".into()));
+    recu
+}
+
+#[cfg(target_os = "linux")]
 pub fn lancer() -> Receiver<Evenement> {
     let (envoi, recu) = mpsc::channel();
     std::thread::spawn(move || {

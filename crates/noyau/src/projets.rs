@@ -13,7 +13,7 @@ use crate::videos;
 pub const IMPORTS: &str = "Vidéos importées";
 
 pub fn racine() -> PathBuf {
-    std::env::home_dir().unwrap_or_default().join("Vidéos").join("Projets")
+    crate::systeme::videos().join("Projets")
 }
 
 /// Un nom de dossier sûr d'après ce qu'on a tapé ; `None` s'il n'en reste rien.

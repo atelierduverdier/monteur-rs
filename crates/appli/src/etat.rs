@@ -71,7 +71,7 @@ pub fn chemin_montage(video: &Path) -> PathBuf {
 
 impl Prise {
     pub fn ouvrir(video: &Path) -> Result<Self, String> {
-        let sortie = std::process::Command::new("ffprobe")
+        let sortie = noyau::systeme::commande("ffprobe")
             .args(videos::commande_sonder(video).into_iter().skip(1))
             .output()
             .map_err(|e| format!("ffprobe : {e}"))?;
@@ -470,7 +470,7 @@ impl Prise {
 
 /// La durée d'une vidéo, par ffprobe.
 pub fn sonder_duree(chemin: &Path) -> Option<f64> {
-    let sortie = std::process::Command::new("ffprobe").args(videos::commande_sonder(chemin).into_iter().skip(1)).output().ok()?;
+    let sortie = noyau::systeme::commande("ffprobe").args(videos::commande_sonder(chemin).into_iter().skip(1)).output().ok()?;
     videos::lire_infos(&String::from_utf8_lossy(&sortie.stdout)).ok().map(|i| i.duree)
 }
 
@@ -524,7 +524,7 @@ impl Preparation {
 }
 
 fn lancer(commande: Vec<String>) -> Result<std::process::Output, String> {
-    std::process::Command::new(&commande[0]).args(&commande[1..]).output().map_err(|e| format!("{} : {e}", commande[0]))
+    noyau::systeme::commande(&commande[0]).args(&commande[1..]).output().map_err(|e| format!("{} : {e}", commande[0]))
 }
 
 /// whisper-cli, avec les modèles de la dictée, sur le son de la vidéo. `None` si whisper n'est pas
@@ -532,7 +532,7 @@ fn lancer(commande: Vec<String>) -> Result<std::process::Output, String> {
 fn transcrire(video: &Path) -> Result<Option<Vec<noyau::montage::SousTitre>>, String> {
     use noyau::sous_titres as st;
     let modeles = st::modeles();
-    let present = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("whisper-cli").is_file()));
+    let present = noyau::systeme::trouver_programme("whisper-cli").is_some();
     if !present || !modeles.join("ggml-large-v3-turbo.bin").exists() {
         return Ok(None);
     }
@@ -589,10 +589,7 @@ fn preparer(video: &Path, mut m: Montage) -> Result<(Montage, String), String> {
     }
     let gris = image?;
     let mouvement = analyse::mouvement_image(&gris.stdout);
-    let gestes = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".local/share"))
-        .join("monteur/gestes");
+    let gestes = noyau::systeme::donnees().join("gestes");
     let dossiers = [video.parent().unwrap_or(Path::new(".")).to_path_buf(), gestes];
     let j = journal::trouver_journal(video, m.duree, &dossiers);
     let mut compte = Vec::new();
