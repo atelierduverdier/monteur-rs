@@ -1,6 +1,10 @@
 //! L'onglet YouTube : le titre, la description, les mots-clés, et l'envoi par `youtube-envoi`.
 //! Toujours en privé : la mise en public reste un geste fait dans YouTube Studio. La description
 //! s'écrit dans `<vidéo> description YouTube.txt`, le fichier déjà en usage.
+//!
+//! Sans `youtube-envoi` (tout autre poste que celui de Christophe : il passe par son compte
+//! Google), « Préparer pour YouTube » : tout est prêt à côté de la prise, les textes se copient,
+//! YouTube Studio s'ouvre, on y glisse la vidéo.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -129,6 +133,8 @@ pub struct Youtube {
     confirmer: bool,
     /// L'envoi demandé par le second clic.
     pub demande: bool,
+    /// « Titre copié. », trois secondes sous les boutons.
+    annonce: Option<(String, Instant)>,
 }
 
 /// Les chapitres aux temps de la vidéo envoyée, dans le texte de la description.
@@ -140,7 +146,7 @@ pub fn inserer_chapitres(d: &mut Description, video: &Path, montage: &noyau::mon
 
 impl Youtube {
     pub fn new() -> Self {
-        Self { description: Description::default(), pour: None, a_ecrire: None, confirmer: false, demande: false }
+        Self { description: Description::default(), pour: None, a_ecrire: None, confirmer: false, demande: false, annonce: None }
     }
 
     /// Écrit le fichier de description s'il a changé depuis une seconde (ou tout de suite).
@@ -169,6 +175,52 @@ impl Youtube {
     /// La vidéo à envoyer : celle avec vignette, sinon rien.
     pub fn a_envoyer(video: &Path) -> Option<PathBuf> {
         Some(noyau::chemin_derive(video, noyau::SUFFIXE_MONTEE)).filter(|m| m.exists())
+    }
+
+    /// `youtube-envoi` est là : l'envoi se fait d'ici. Sinon, par YouTube Studio.
+    pub fn envoi_direct() -> bool {
+        Path::new(&videos::programme_envoi()).is_file()
+    }
+
+    /// Préparer pour YouTube : de quoi remplir YouTube Studio, la vidéo glissée à la main.
+    fn preparer_pour_studio(&mut self, ui: &Ui, video: &Path, montee: Option<&Path>) {
+        let d = &self.description;
+        ui.text_wrapped("Envoi par YouTube Studio : la vidéo montée et sa vignette sont à côté de la prise. Copie les textes un à un, puis glisse la vidéo dans la page de Studio.");
+        let mut annonce = None;
+        let mut copier = |ui: &Ui, etiquette: &str, fait: &str, texte: &str| {
+            if ui.button(etiquette) {
+                annonce = Some(if crate::presse_papiers::copier(texte) { format!("{fait} : à coller dans Studio.") } else { "Le presse-papiers ne répond pas.".to_string() });
+            }
+        };
+        copier(ui, "Copier le titre", "Titre copié", &d.titre);
+        ui.same_line();
+        copier(ui, "Copier la description", "Description copiée", d.texte.trim());
+        ui.same_line();
+        copier(ui, "Copier les mots-clés", "Mots-clés copiés", &d.mots_cles);
+        if let Some(a) = annonce {
+            self.annonce = Some((a, Instant::now()));
+        }
+        if let Some((a, depuis)) = &self.annonce
+            && depuis.elapsed().as_secs() < 3
+        {
+            ui.text_colored(charte::c(charte::SUCCES_TEXTE), a);
+        }
+        if ui.button_with_size("Ouvrir YouTube Studio", [200.0, 32.0]) {
+            let _ = opener::open_browser("https://www.youtube.com/upload");
+        }
+        ui.same_line();
+        if ui.button_with_size("Montrer la vidéo", [160.0, 32.0])
+            && let Some(dossier) = montee.unwrap_or(video).parent()
+        {
+            let _ = opener::open(dossier);
+        }
+        if let Some(m) = montee {
+            ui.text_colored(charte::c(charte::TEXT_2), format!("À glisser : {}", m.file_name().unwrap_or_default().to_string_lossy()));
+        }
+        let jpg = noyau::chemin_derive(video, noyau::SUFFIXE_JPG);
+        if jpg.exists() {
+            ui.text_colored(charte::c(charte::TEXT_2), format!("Vignette (Miniature, dans Studio) : {}", jpg.file_name().unwrap_or_default().to_string_lossy()));
+        }
     }
 
     /// Le panneau ; la fiche n'y est que lue.
@@ -233,9 +285,11 @@ impl Youtube {
         ui.separator();
         if let Some(e) = envoi {
             ui.text_colored(charte::c(charte::ACCENT_HOVER), format!("Envoi de {} : {:.0} %", e.video.file_stem().unwrap_or_default().to_string_lossy(), e.pourcent));
+        } else if !Self::envoi_direct() {
+            self.preparer_pour_studio(ui, video, montee.as_deref());
         } else if self.confirmer {
             let taille = montee.as_ref().and_then(|m| std::fs::metadata(m).ok()).map_or(0.0, |m| m.len() as f64 / 1e6);
-            ui.text_wrapped(format!("Envoyer « {} » ({taille:.0} Mo) sur la chaîne VerdierCAM, en privé ? La mise en public se fera ensuite dans YouTube Studio.", self.description.titre));
+            ui.text_wrapped(format!("Envoyer « {} » ({taille:.0} Mo) sur ta chaîne, en privé ? La mise en public se fera ensuite dans YouTube Studio.", self.description.titre));
             if !fiche.youtube_id.is_empty() {
                 ui.text_colored(charte::c(charte::ERREUR), "Elle a déjà été envoyée : cela fera une deuxième vidéo sur la chaîne.");
             }

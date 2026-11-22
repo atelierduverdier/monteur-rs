@@ -19,9 +19,73 @@ pub const SRT_LIGNES: usize = 2;
 /// Un sous-titre presque tout coupé ne s'écrit pas.
 pub const SRT_COURT: f64 = 0.3;
 
-/// Les modèles de la dictée, déjà sur ce poste.
+/// Les modèles de la dictée, déjà sur le poste de Christophe.
 pub fn modeles() -> PathBuf {
     crate::systeme::dossier_donnees().join("dictee/modeles")
+}
+
+/// Les modèles du Monteur lui-même : ceux qu'il télécharge.
+pub fn modeles_du_monteur() -> PathBuf {
+    crate::systeme::donnees().join("modeles")
+}
+
+/// Les modèles de Whisper, du meilleur au plus léger : le premier trouvé sert.
+pub const MODELES: [&str; 5] = ["ggml-large-v3-turbo.bin", "ggml-large-v3-turbo-q5_0.bin", "ggml-medium.bin", "ggml-small.bin", "ggml-base.bin"];
+/// Le modèle de détection de voix : sans lui, Whisper invente des phrases dans les silences.
+pub const VAD: &str = "ggml-silero-v5.1.2.bin";
+
+/// Un fichier à télécharger : son nom, d'où, sa taille et son empreinte SHA-256.
+pub struct ATelecharger {
+    pub nom: &'static str,
+    pub url: &'static str,
+    pub taille: u64,
+    pub sha256: &'static str,
+}
+
+/// Ce que le Monteur télécharge pour les sous-titres : large-v3-turbo quantifié (le français y est presque aussi bon
+/// que dans le modèle entier, pour le tiers de la place), et la détection de voix. Empreintes de huggingface.co,
+/// relevées le 22/11/2026.
+pub static A_TELECHARGER: [ATelecharger; 2] = [
+    ATelecharger {
+        nom: "ggml-large-v3-turbo-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        taille: 574_041_195,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    },
+    ATelecharger {
+        nom: VAD,
+        url: "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+        taille: 885_098,
+        sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+    },
+];
+
+/// Le meilleur modèle présent : dans les modèles du Monteur, puis dans ceux de la dictée.
+pub fn trouver_modele_dans(dossiers: &[PathBuf]) -> Option<PathBuf> {
+    MODELES.iter().flat_map(|m| dossiers.iter().map(move |d| d.join(m))).find(|p| p.is_file())
+}
+
+pub fn trouver_modele() -> Option<PathBuf> {
+    trouver_modele_dans(&[modeles_du_monteur(), modeles()])
+}
+
+/// Les langues proposées pour les sous-titres : le code de Whisper et son nom.
+pub const LANGUES: [(&str, &str); 6] = [("fr", "Français"), ("en", "Anglais"), ("es", "Espagnol"), ("de", "Allemand"), ("it", "Italien"), ("auto", "Reconnue seule")];
+
+fn chemin_langue() -> PathBuf {
+    crate::systeme::donnees().join("langue-sous-titres")
+}
+
+/// La langue des sous-titres, le français d'office.
+pub fn langue() -> String {
+    std::fs::read_to_string(chemin_langue()).ok().map(|l| l.trim().to_string()).filter(|l| LANGUES.iter().any(|(c, _)| c == l)).unwrap_or_else(|| "fr".into())
+}
+
+pub fn ecrire_langue(code: &str) -> std::io::Result<()> {
+    if let Some(d) = chemin_langue().parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(chemin_langue(), format!("{code}\n"))
 }
 
 pub fn commande_son_16k(video: &Path, wav: &Path) -> Vec<String> {
@@ -30,15 +94,15 @@ pub fn commande_son_16k(video: &Path, wav: &Path) -> Vec<String> {
         .to_vec()
 }
 
-/// `whisper-cli` sur ce poste : segments de 60 caractères au plus, coupés entre deux mots, et la
-/// détection de voix quand son modèle est là (sinon Whisper invente des phrases dans les
-/// silences).
-pub fn commande_whisper(wav: &Path, base: &Path, langue: &str, modeles: &Path) -> Vec<String> {
+/// `whisper-cli` : segments de 60 caractères au plus, coupés entre deux mots, et la détection de
+/// voix quand son modèle est à côté de celui de Whisper (sinon Whisper invente des phrases dans
+/// les silences).
+pub fn commande_whisper(wav: &Path, base: &Path, langue: &str, modele: &Path) -> Vec<String> {
     let fils = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
     let mut cmd: Vec<String> = [
         "whisper-cli",
         "-m",
-        &modeles.join("ggml-large-v3-turbo.bin").to_string_lossy(),
+        &modele.to_string_lossy(),
         "-l",
         langue,
         "-ml",
@@ -54,7 +118,7 @@ pub fn commande_whisper(wav: &Path, base: &Path, langue: &str, modeles: &Path) -
     ]
     .map(String::from)
     .to_vec();
-    let vad = modeles.join("ggml-silero-v5.1.2.bin");
+    let vad = modele.with_file_name(VAD);
     if vad.exists() {
         cmd.extend(["--vad".into(), "-vm".into(), vad.to_string_lossy().into_owned()]);
     }
@@ -323,4 +387,38 @@ pub fn inserer_chapitres(texte: &str, chapitres: &str) -> String {
     let reste = reste.join("\n");
     let reste = reste.trim();
     if reste.is_empty() { chapitres.to_string() } else { format!("{reste}\n\n{chapitres}") }
+}
+
+#[cfg(test)]
+mod tests_modeles {
+    use super::*;
+
+    #[test]
+    fn le_meilleur_modele_present() {
+        let d = std::env::temp_dir().join(format!("monteur-modeles-{}", std::process::id()));
+        let (monteur, dictee) = (d.join("monteur"), d.join("dictee"));
+        std::fs::create_dir_all(&monteur).unwrap();
+        std::fs::create_dir_all(&dictee).unwrap();
+        let dossiers = [monteur.clone(), dictee.clone()];
+        assert_eq!(trouver_modele_dans(&dossiers), None);
+        std::fs::write(monteur.join("ggml-small.bin"), "").unwrap();
+        assert_eq!(trouver_modele_dans(&dossiers), Some(monteur.join("ggml-small.bin")));
+        // Le modèle entier de la dictée passe devant un plus léger du Monteur.
+        std::fs::write(dictee.join("ggml-large-v3-turbo.bin"), "").unwrap();
+        assert_eq!(trouver_modele_dans(&dossiers), Some(dictee.join("ggml-large-v3-turbo.bin")));
+        // La détection de voix se prend à côté du modèle choisi.
+        std::fs::write(dictee.join(VAD), "").unwrap();
+        let c = commande_whisper(Path::new("s.wav"), Path::new("b"), "en", &dictee.join("ggml-large-v3-turbo.bin")).join(" ");
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(c.contains("-l en") && c.contains("--vad -vm") && c.contains(VAD), "{c}");
+    }
+
+    #[test]
+    fn la_liste_a_telecharger_tient() {
+        for f in &A_TELECHARGER {
+            assert_eq!(f.sha256.len(), 64, "{}", f.nom);
+            assert!(f.url.ends_with(f.nom) && f.url.starts_with("https://huggingface.co/"), "{}", f.url);
+        }
+        assert!(MODELES.contains(&A_TELECHARGER[0].nom), "le modèle téléchargé est cherché");
+    }
 }

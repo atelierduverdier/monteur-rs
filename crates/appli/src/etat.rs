@@ -527,15 +527,23 @@ fn lancer(commande: Vec<String>) -> Result<std::process::Output, String> {
     noyau::systeme::commande(&commande[0]).args(&commande[1..]).output().map_err(|e| format!("{} : {e}", commande[0]))
 }
 
-/// whisper-cli, avec les modèles de la dictée, sur le son de la vidéo. `None` si whisper n'est pas
+/// Pourquoi il n'y a pas de sous-titres, et ce qu'il faut faire.
+pub fn sans_whisper() -> String {
+    if noyau::systeme::trouver_programme("whisper-cli").is_none() {
+        "whisper-cli introuvable".into()
+    } else {
+        "pas de modèle de Whisper (Montage › Télécharger le modèle des sous-titres)".into()
+    }
+}
+
+/// whisper-cli, avec le meilleur modèle présent, sur le son de la vidéo. `None` si whisper n'est pas
 /// sur ce poste.
 fn transcrire(video: &Path) -> Result<Option<Vec<noyau::montage::SousTitre>>, String> {
     use noyau::sous_titres as st;
-    let modeles = st::modeles();
     let present = noyau::systeme::trouver_programme("whisper-cli").is_some();
-    if !present || !modeles.join("ggml-large-v3-turbo.bin").exists() {
+    let Some(modele) = st::trouver_modele().filter(|_| present) else {
         return Ok(None);
-    }
+    };
     let dossier = std::env::temp_dir().join(format!("monteur2-whisper-{}", std::process::id()));
     std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
     let (wav, base) = (dossier.join("son.wav"), dossier.join("voix"));
@@ -544,7 +552,7 @@ fn transcrire(video: &Path) -> Result<Option<Vec<noyau::montage::SousTitre>>, St
         if !son.status.success() {
             return Err("le son n'a pas pu être extrait".to_string());
         }
-        let w = lancer(st::commande_whisper(&wav, &base, "fr", &modeles))?;
+        let w = lancer(st::commande_whisper(&wav, &base, &st::langue(), &modele))?;
         if !w.status.success() {
             return Err(String::from_utf8_lossy(&w.stderr).lines().last().unwrap_or("whisper-cli").to_string());
         }
@@ -564,7 +572,7 @@ fn refaire_sous_titres(video: &Path, mut m: Montage) -> Result<(Montage, String)
             let n = m.sous_titres.len();
             Ok((m, format!("{n} sous-titre(s) : à relire.")))
         }
-        None => Err("whisper-cli ou son modèle est introuvable sur ce poste".into()),
+        None => Err(sans_whisper()),
     }
 }
 
@@ -583,7 +591,7 @@ fn preparer(video: &Path, mut m: Montage) -> Result<(Montage, String), String> {
             note_whisper = Some(format!("{} sous-titre(s) à relire", sous_titres.len()));
             m.sous_titres = sous_titres;
         }
-        Some(Ok(None)) => note_whisper = Some("pas de sous-titres : whisper-cli introuvable".to_string()),
+        Some(Ok(None)) => note_whisper = Some(format!("pas de sous-titres : {}", sans_whisper())),
         Some(Err(e)) => note_whisper = Some(format!("sous-titres impossibles : {e}")),
         None => {}
     }

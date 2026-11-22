@@ -25,6 +25,8 @@ rfd = "0.18"
 trash = "5"
 opener = "0.9"
 jpeg-encoder = "0.7"
+sha2 = "0.10"
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 # Linux seulement : le nanoKONTROL2 par le séquenceur d'ALSA, le raccourci global par le portail.
 [target.'cfg(target_os = "linux")'.dependencies]

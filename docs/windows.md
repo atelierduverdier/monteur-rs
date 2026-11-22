@@ -1,14 +1,16 @@
 # La version Windows (22/11/2026, lot 2 de la portabilité)
 
 Le Monteur se construit pour Windows ici, sous Linux, comme VerdierCAM. Ce qui sort :
-`dist/Monteur2-<version>-windows-x64/` et son `.zip` (80 Mo ; 203 Mo déballé).
+`dist/Monteur2-<version>-windows-x64/` et son `.zip` (90 Mo ; 230 Mo déballé).
 
 | Fichier | Rôle |
 |---|---|
 | `monteur2.exe` (20 Mo) | le Monteur ; application graphique, sans console ; libc++ et libunwind liées dedans |
 | `ffmpeg.exe`, `ffprobe.exe` | appelés par le Monteur, trouvés à côté de lui (`noyau::systeme::commande`) |
 | 7 DLL de FFmpeg 9.0.2 | avcodec (122 Mo), avfilter (38), avformat (20), avdevice, avutil, swresample, swscale ; elles ne citent que Windows |
-| `licences/`, `LISEZMOI.txt` | FFmpeg (GPL, avec x264), polices (OFL) |
+| `whisper-cli.exe`, `libwhisper.dll`, 15 DLL de ggml | les sous-titres ; ggml choisit au lancement la variante du processeur |
+| `libc++.dll`, `libunwind.dll` | la bibliothèque C++ de llvm-mingw, pour whisper |
+| `licences/`, `LISEZMOI.txt` | FFmpeg (GPL, avec x264), whisper.cpp (MIT), llvm-mingw, polices (OFL) |
 
 ## Mettre la chaîne en place
 
@@ -30,6 +32,19 @@ d'Arch reste celui par défaut ; `~/.cargo` et le PATH ne bougent pas.
    en demande environ 200) : `ffmpeg-n9.0.2-61-gd59078794d-win64-gpl-shared-9.0.zip` de la publication
    `autobuild-2026-11-22-12-36` de https://github.com/BtbN/FFmpeg-Builds, empreinte vérifiée contre son
    `checksums.sha256`, déballé dans `$M/ffmpeg-extrait/`, et `$M/ffmpeg` pointe dessus.
+
+4. **whisper-cli**, depuis les sources de whisper.cpp 1.9.5 (`codeload.github.com/ggml-org/whisper.cpp`, tag
+   v1.9.5, déballées dans `$M/sources/`), llvm-mingw dans le PATH :
+
+   ```bash
+   cmake -S $M/sources/whisper.cpp-1.9.5 -B $M/whisper-construction -G Ninja -DCMAKE_BUILD_TYPE=Release \
+     -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 -DCMAKE_C_COMPILER=x86_64-w64-mingw32-clang \
+     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-clang++ -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+     -DCMAKE_CXX_FLAGS="-include cstdlib -include algorithm" -DCMAKE_INSTALL_PREFIX=$M/whisper \
+     -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF \
+     -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_SDL2=OFF -DWHISPER_CURL=OFF
+   cmake --build $M/whisper-construction && cmake --install $M/whisper-construction
+   ```
 
 ## Construire
 
@@ -62,7 +77,7 @@ réserve 16 Go, n'a ni lecteur CD ni agent invité : le zip y entre par le rése
 où l'on veut, double-cliquer `monteur2.exe`, puis : ouvrir une prise OBS, Préparer, poser un zoom, écrire la
 vignette, Voix › écouter avant/après, Rendre, mettre une prise à la corbeille, Ouvrir le dossier.
 
-**Pas encore sous Windows** : les sous-titres et l'envoi (whisper-cli et youtube-envoi, lot 4), le nanoKONTROL2.
+**Pas sous Windows** : le nanoKONTROL2. Les sous-titres et YouTube : lot 4, dans [portabilite.md](portabilite.md).
 Le `.exe` n'a pas encore d'icône et n'est pas signé : SmartScreen avertira au premier lancement d'un zip téléchargé
 (VerdierCAM signe les siens).
 

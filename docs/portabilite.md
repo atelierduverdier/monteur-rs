@@ -41,3 +41,28 @@ pas de console (`windows_subsystem`) ; les plantages vont dans `monteur2-plantag
   le portail héritait du vrai écran, et ce dialogue s'est ouvert une fois sur le bureau de Christophe.
 
 **Lot 2, la compilation pour Windows** : faite le même jour, voir [windows.md](windows.md).
+
+# Lot 4 : les sous-titres et YouTube pour tout le monde (22/11/2026)
+
+**Whisper livré.** `whisper-cli` se compile depuis les sources de whisper.cpp 1.9.5 (empreinte du tarball
+`ff1a9053…`) : pour Windows avec le llvm-mingw de VerdierCAM, ses variantes du processeur chargées au lancement
+(`GGML_BACKEND_DL`, de SSE4.2 à AVX-512, zen4 choisie seule ici) ; il part dans le zip avec ses DLL. Sous Wine :
+25 s de voix transcrites en 10,8 s sur le processeur, en français. Le libc++ récent ne rend plus `<cstdlib>` ni
+`<algorithm>` par ricochet : `-include` de l'un et de l'autre à la compilation, les sources ne bougent pas.
+
+**Le modèle.** Le Monteur prend le meilleur présent (`noyau::sous_titres::trouver_modele`) : large-v3-turbo,
+puis turbo q5_0, medium, small, base, dans ses modèles (`monteur/modeles`) puis dans ceux de la dictée. Montage ›
+Télécharger le modèle des sous-titres propose turbo q5_0 et la détection de voix (575 Mo, huggingface.co) : curl
+du système (Windows 10 et 11 l'ont), un `.partiel`, l'empreinte SHA-256 vérifiée avant de poser le fichier, rien
+de retéléchargé s'il est déjà là ; l'avancement et « Arrêter » dans la barre d'état. Essayé pour de bon sur la
+détection de voix (0,9 Mo) : `cargo test -p appli --release -- --ignored le_vad`.
+
+**La langue.** Montage › Langue des sous-titres : français, anglais, espagnol, allemand, italien, ou reconnue
+seule (`-l auto`). Gardée dans `monteur/langue-sous-titres`. Sans whisper ni modèle, Préparer le dit et dit quoi
+faire.
+
+**Préparer pour YouTube.** Sans `youtube-envoi` (il passe par le compte Google de Christophe), l'onglet YouTube
+devient « Envoi par YouTube Studio » : Copier le titre, la description, les mots-clés ; Ouvrir YouTube Studio ;
+Montrer la vidéo ; les noms de la vidéo montée et de la vignette à y glisser. Le presse-papiers est enfin relié au
+système (`presse_papiers.rs`, arboard) : Ctrl+C et Ctrl+V marchent aussi dans les champs, qui ne parlaient qu'à
+eux-mêmes. Chez Christophe, `youtube-envoi` est là : rien ne change.

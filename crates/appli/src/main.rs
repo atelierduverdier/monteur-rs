@@ -19,8 +19,10 @@ mod ligne;
 mod midi;
 mod miniatures;
 mod outils;
+mod presse_papiers;
 mod raccourci;
 mod scenario;
+mod telechargement;
 mod vignette;
 mod voix;
 mod vue;
@@ -236,6 +238,9 @@ struct Monteur {
     ouvrir_corbeille: bool,
     /// Un enregistrement simple : il finit dans Copies d'écran, sans toucher au travail en cours.
     capture_simple: bool,
+    /// Le modèle des sous-titres en train d'arriver, et la boîte qui le propose.
+    telechargement: Option<telechargement::Telechargement>,
+    ouvrir_modele: bool,
     /// Windows : la fenêtre à filmer, choisie dans la boîte du Monteur.
     #[cfg(windows)]
     choix_fenetre: Option<capture::ChoixFenetre>,
@@ -382,6 +387,8 @@ impl Monteur {
             raccourci: None,
             midi,
             capture_simple: false,
+            telechargement: None,
+            ouvrir_modele: false,
             #[cfg(windows)]
             choix_fenetre: None,
             #[cfg(windows)]
@@ -1360,6 +1367,48 @@ impl Monteur {
         };
     }
 
+    /// « Télécharger le modèle des sous-titres » : ce qui part, d'où, où ça se range.
+    fn boite_modele(&mut self, ui: &Ui) {
+        const TITRE: &str = "Modèle des sous-titres";
+        if std::mem::take(&mut self.ouvrir_modele) {
+            ui.open_popup(TITRE);
+        }
+        let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() else { return };
+        let dossier = noyau::sous_titres::modeles_du_monteur();
+        let total: u64 = noyau::sous_titres::A_TELECHARGER.iter().map(|f| f.taille).sum();
+        ui.text_wrapped(format!(
+            "Whisper large-v3-turbo et la détection de voix : {:.0} Mo depuis huggingface.co, rangés dans {}. Les sous-titres se font ensuite sur ce poste, rien n'est envoyé.",
+            total as f64 / 1e6,
+            dossier.display()
+        ));
+        if let Some(m) = noyau::sous_titres::trouver_modele() {
+            ui.text_colored(charte::c(charte::SUCCES_TEXTE), format!("Un modèle est déjà là : {}", m.display()));
+        }
+        if noyau::systeme::trouver_programme("whisper-cli").is_none() {
+            ui.text_colored(charte::c(charte::ALERTE), "whisper-cli est introuvable : sans lui, le modèle ne servira pas.");
+        }
+        ui.spacing();
+        if ui.button_with_size("Télécharger", [160.0, 30.0]) {
+            self.telechargement = Some(telechargement::Telechargement::lancer(&noyau::sous_titres::A_TELECHARGER, dossier));
+            self.message = "Modèle des sous-titres : téléchargement…".into();
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button_with_size("Annuler##modele", [100.0, 30.0]) {
+            ui.close_current_popup();
+        }
+        boite.end();
+    }
+
+    fn suivre_telechargement(&mut self) {
+        let Some(fin) = self.telechargement.as_mut().and_then(telechargement::Telechargement::suivre) else { return };
+        self.telechargement = None;
+        self.message = match fin {
+            Ok(()) => "Modèle des sous-titres prêt : Préparer fera les sous-titres.".into(),
+            Err(e) => format!("Modèle des sous-titres : {e}"),
+        };
+    }
+
     fn boite_projet(&mut self, ui: &Ui) {
         if std::mem::take(&mut self.ouvrir_boite) {
             ui.open_popup("Nouveau projet");
@@ -1658,6 +1707,7 @@ impl Application for Monteur {
         self.gras = Some(atlas.add_font(&[FontSource::stb_truetype_with_size(gras, 15.0)]));
         self.mono = Some(atlas.add_font(&[FontSource::stb_truetype_with_size(mono, 15.0)]));
         charte::appliquer(imgui.style_mut());
+        imgui.set_clipboard_backend(presse_papiers::PourImgui);
         Ok(())
     }
 
@@ -1940,6 +1990,22 @@ impl Application for Monteur {
                     p.refaire_les_sous_titres();
                     self.message = "Transcription de la voix (whisper, sur ce poste)…".into();
                 }
+                ui.separator();
+                if ui.menu_item_enabled_selected_no_shortcut("Télécharger le modèle des sous-titres…", false, self.telechargement.is_none()) {
+                    self.ouvrir_modele = true;
+                }
+                if let Some(l) = ui.begin_menu("Langue des sous-titres") {
+                    let actuelle = noyau::sous_titres::langue();
+                    for (code, nom) in noyau::sous_titres::LANGUES {
+                        if ui.menu_item_enabled_selected_no_shortcut(nom, actuelle == code, true) {
+                            self.message = match noyau::sous_titres::ecrire_langue(code) {
+                                Ok(()) => format!("Sous-titres en {} : Montage › Refaire les sous-titres pour la prise ouverte.", nom.to_lowercase()),
+                                Err(e) => format!("Langue non gardée : {e}"),
+                            };
+                        }
+                    }
+                    l.end();
+                }
                 m.end();
             }
             barre.end();
@@ -2035,6 +2101,8 @@ impl Application for Monteur {
         }
         self.boite_projet(ui);
         self.boite_corbeille(ui);
+        self.boite_modele(ui);
+        self.suivre_telechargement();
         #[cfg(windows)]
         self.boite_fenetre(ui);
         if self.fenetre_rendre {
@@ -2067,6 +2135,14 @@ impl Application for Monteur {
                     ui.same_line();
                     if ui.small_button("Arrêter le rendu") {
                         r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                if let Some(t) = &self.telechargement {
+                    ui.same_line();
+                    ui.text_colored(charte::c(charte::ACCENT_HOVER), format!("  modèle des sous-titres : {:.0} %", t.avance() * 100.0));
+                    ui.same_line();
+                    if ui.small_button("Arrêter le téléchargement") {
+                        t.arreter();
                     }
                 }
                 if let Some(nom) = &self.midi.branche {
