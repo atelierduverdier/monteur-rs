@@ -32,7 +32,17 @@ fn deja_la(cible: &Path, f: &ATelecharger) -> bool {
     std::fs::metadata(cible).is_ok_and(|m| m.len() == f.taille) && empreinte(cible).is_ok_and(|e| e == f.sha256)
 }
 
+/// Le morceau déjà reçu d'un fichier, à reprendre : sa taille, 0 s'il n'y en a pas.
+fn deja_recu(partiel: &Path) -> u64 {
+    std::fs::metadata(partiel).map_or(0, |m| m.len())
+}
+
 /// Un fichier : curl jusqu'au bout (ou l'arrêt), puis l'empreinte.
+///
+/// LA REPRISE (23/11/2026, Christophe : « si je ferme le Monteur, ça va couper le téléchargement », puis « fais-le ») :
+/// arrêté, ou coupé par le réseau, le `.partiel` reste ; le téléchargement suivant repart de là (`--continue-at`).
+/// Il n'est effacé que s'il ne peut pas servir : une empreinte fausse au bout, un serveur qui refuse la reprise ou
+/// répond par une erreur, un morceau plus gros que le fichier.
 fn un_fichier(f: &ATelecharger, dossier: &Path, arret: &AtomicBool, recus: &AtomicU64, avant: u64) -> Result<(), String> {
     let cible = dossier.join(f.nom);
     if deja_la(&cible, f) {
@@ -40,9 +50,30 @@ fn un_fichier(f: &ATelecharger, dossier: &Path, arret: &AtomicBool, recus: &Atom
         return Ok(());
     }
     let partiel = dossier.join(format!("{}.partiel", f.nom));
-    let mut curl = noyau::systeme::commande("curl")
-        .args(["--location", "--fail", "--silent", "--show-error", "--retry", "3", "--output"])
-        .arg(&partiel)
+    if deja_recu(&partiel) > f.taille {
+        let _ = std::fs::remove_file(&partiel);
+    }
+    if deja_recu(&partiel) < f.taille {
+        recevoir(f, &partiel, arret, recus, avant)?;
+    }
+    let e = empreinte(&partiel).map_err(|e| e.to_string())?;
+    if e != f.sha256 {
+        let _ = std::fs::remove_file(&partiel);
+        return Err(format!("{} : empreinte inattendue, fichier écarté", f.nom));
+    }
+    std::fs::rename(&partiel, &cible).map_err(|e| format!("{} : {e}", cible.display()))
+}
+
+/// curl, de là où le `.partiel` s'est arrêté jusqu'au bout du fichier.
+fn recevoir(f: &ATelecharger, partiel: &Path, arret: &AtomicBool, recus: &AtomicU64, avant: u64) -> Result<(), String> {
+    let mut commande = noyau::systeme::commande("curl");
+    commande.args(["--location", "--fail", "--silent", "--show-error", "--retry", "3"]);
+    if deja_recu(partiel) > 0 {
+        commande.args(["--continue-at", "-"]);
+    }
+    let mut curl = commande
+        .arg("--output")
+        .arg(partiel)
         .arg(f.url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -53,8 +84,7 @@ fn un_fichier(f: &ATelecharger, dossier: &Path, arret: &AtomicBool, recus: &Atom
         if arret.load(Ordering::Relaxed) {
             let _ = curl.kill();
             let _ = curl.wait();
-            let _ = std::fs::remove_file(&partiel);
-            return Err("Téléchargement arrêté.".into());
+            return Err("Téléchargement arrêté : il reprendra où il en était.".into());
         }
         recus.store(avant + std::fs::metadata(&partiel).map_or(0, |m| m.len()), Ordering::Relaxed);
         match curl.try_wait() {
@@ -63,20 +93,20 @@ fn un_fichier(f: &ATelecharger, dossier: &Path, arret: &AtomicBool, recus: &Atom
             Err(e) => return Err(e.to_string()),
         }
     };
+    recus.store(avant + deja_recu(partiel), Ordering::Relaxed);
     if !etat.success() {
         let mut erreur = String::new();
         if let Some(mut e) = curl.stderr.take() {
             let _ = e.read_to_string(&mut erreur);
         }
-        let _ = std::fs::remove_file(&partiel);
+        // 22 : le serveur répond par une erreur (dont « plage impossible ») ; 33 : il ne sait pas reprendre. Le
+        // morceau ne servirait pas. Le réseau coupé (6, 7, 18, 28, 56…) le laisse, pour la reprise.
+        if matches!(etat.code(), Some(22 | 33)) || deja_recu(partiel) == 0 {
+            let _ = std::fs::remove_file(partiel);
+        }
         return Err(format!("{} : {}", f.nom, erreur.lines().last().unwrap_or("curl a échoué").trim()));
     }
-    let e = empreinte(&partiel).map_err(|e| e.to_string())?;
-    if e != f.sha256 {
-        let _ = std::fs::remove_file(&partiel);
-        return Err(format!("{} : empreinte inattendue, fichier écarté", f.nom));
-    }
-    std::fs::rename(&partiel, &cible).map_err(|e| format!("{} : {e}", cible.display()))
+    Ok(())
 }
 
 /// Des fichiers téléchargés l'un après l'autre, dans un fil.
@@ -165,6 +195,78 @@ mod tests {
         assert!(premier.is_ok(), "{premier:?}");
         assert!(second.is_ok() && date.is_some() && date == date2, "déjà là : pas retéléchargé");
         assert_eq!(fichiers.len(), 1, "{fichiers:?}");
+    }
+
+    /// Un petit serveur HTTP qui sait reprendre (`Range: bytes=N-`) : il sert `donnees` et note d'où part chaque
+    /// demande.
+    fn serveur(donnees: Vec<u8>) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<u64>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let ecoute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = ecoute.local_addr().unwrap().port();
+        let departs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let d = departs.clone();
+        std::thread::spawn(move || {
+            for flux in ecoute.incoming().flatten() {
+                let mut lecteur = BufReader::new(flux.try_clone().unwrap());
+                let mut depart = 0u64;
+                loop {
+                    let mut ligne = String::new();
+                    if lecteur.read_line(&mut ligne).unwrap_or(0) == 0 || ligne == "\r\n" {
+                        break;
+                    }
+                    let bas = ligne.to_ascii_lowercase();
+                    if let Some(reste) = bas.strip_prefix("range: bytes=") {
+                        depart = reste.trim().trim_end_matches('-').parse().unwrap_or(0);
+                    }
+                }
+                d.lock().unwrap().push(depart);
+                let corps = &donnees[depart as usize..];
+                let entete = if depart > 0 {
+                    format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {depart}-{}/{}\r\nConnection: close\r\n\r\n",
+                        corps.len(), donnees.len() - 1, donnees.len())
+                } else {
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", corps.len())
+                };
+                let mut flux = flux;
+                let _ = flux.write_all(entete.as_bytes());
+                let _ = flux.write_all(corps);
+            }
+        });
+        (port, departs)
+    }
+
+    /// LA REPRISE : un `.partiel` de 100 000 octets déjà là, le téléchargement demande la suite (et seulement la
+    /// suite), et le fichier entier, à la bonne empreinte, prend son nom.
+    #[test]
+    fn reprend_ou_il_en_etait() {
+        let donnees: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        let sha = format!("{:x}", Sha256::digest(&donnees));
+        let (port, departs) = serveur(donnees.clone());
+        let entree: &'static [ATelecharger] = Box::leak(Box::new([ATelecharger {
+            nom: "essai.bin",
+            url: format!("http://127.0.0.1:{port}/essai.bin").leak(),
+            taille: donnees.len() as u64,
+            sha256: sha.leak(),
+        }]));
+        let d = std::env::temp_dir().join(format!("monteur-reprise-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("essai.bin.partiel"), &donnees[..100_000]).unwrap();
+        let mut t = Telechargement::lancer(entree, d.clone());
+        let mut fin = None;
+        for _ in 0..400 {
+            fin = t.suivre();
+            if fin.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let recu = std::fs::read(d.join("essai.bin")).unwrap_or_default();
+        let partiel_reste = d.join("essai.bin.partiel").exists();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(matches!(fin, Some(Ok(()))), "{fin:?}");
+        assert_eq!(*departs.lock().unwrap(), vec![100_000], "la suite seulement");
+        assert!(recu == donnees && !partiel_reste);
     }
 
     /// Une adresse qui n'existe pas : une erreur claire, et pas de `.partiel` qui traîne.

@@ -35,7 +35,7 @@ use std::sync::mpsc::{self, Receiver};
 
 use composeur::police::Polices;
 use dear_app::{
-    AppConfig, Application, ApplicationStage, DockingConfig, FrameContext, GpuContext, InitContext, InitializedContext,
+    AppConfig, Application, ApplicationStage, DockingConfig, EventContext, FrameContext, GpuContext, InitContext, InitializedContext,
     RedrawMode, RunError, WgpuConfig, WgpuPreset, run,
 };
 use dear_imgui_rs::*;
@@ -242,6 +242,9 @@ struct Monteur {
     /// Le modèle des sous-titres en train d'arriver, et la boîte qui le propose.
     telechargement: Option<telechargement::Telechargement>,
     ouvrir_modele: bool,
+    /// Fermer pendant un téléchargement : la boîte qui le demande, puis la sortie confirmée.
+    ouvrir_quitter: bool,
+    quitter: bool,
     /// Les boîtes de l'aide.
     ouvrir_ce_qu_il_faut: bool,
     ouvrir_a_propos: bool,
@@ -393,6 +396,8 @@ impl Monteur {
             capture_simple: false,
             telechargement: None,
             ouvrir_modele: false,
+            ouvrir_quitter: false,
+            quitter: false,
             // Un déroulé d'essai n'en veut pas : la boîte cacherait la fenêtre.
             ouvrir_ce_qu_il_faut: aide::a_montrer_au_lancement() && std::env::var_os("MONTEUR2_SCENARIO").is_none(),
             ouvrir_a_propos: false,
@@ -1404,6 +1409,28 @@ impl Monteur {
         boite.end();
     }
 
+    /// « Quitter quand même ? », quand on ferme pendant le téléchargement du modèle.
+    fn boite_quitter(&mut self, ui: &Ui) {
+        const TITRE: &str = "Quitter le Monteur ?";
+        if std::mem::take(&mut self.ouvrir_quitter) {
+            ui.open_popup(TITRE);
+        }
+        let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() else { return };
+        let avance = self.telechargement.as_ref().map_or(1.0, telechargement::Telechargement::avance);
+        ui.text(format!("Le modèle des sous-titres est en cours de téléchargement ({:.0} %).", avance * 100.0));
+        ui.text("En quittant, il s'arrête ; le prochain téléchargement reprendra où il en est.");
+        ui.spacing();
+        if ui.button_with_size("Continuer le téléchargement", [230.0, 30.0]) {
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button_with_size("Quitter quand même", [170.0, 30.0]) {
+            self.quitter = true;
+            ui.close_current_popup();
+        }
+        boite.end();
+    }
+
     fn suivre_telechargement(&mut self) {
         let Some(fin) = self.telechargement.as_mut().and_then(telechargement::Telechargement::suivre) else { return };
         self.telechargement = None;
@@ -1723,6 +1750,16 @@ impl Application for Monteur {
         Ok(())
     }
 
+    /// FERMER PENDANT UN TÉLÉCHARGEMENT (23/11/2026, Christophe : « si je ferme le Monteur, ça va couper le
+    /// téléchargement ») : la fenêtre ne se ferme pas tout de suite, une boîte le demande d'abord.
+    fn event(&mut self, context: &mut EventContext<'_>) -> Result<(), RunError> {
+        if context.exit_requested() && self.telechargement.is_some() && !self.quitter {
+            context.cancel_exit();
+            self.ouvrir_quitter = true;
+        }
+        Ok(())
+    }
+
     fn gpu_lost(&mut self, g: &mut GpuContext<'_>) -> Result<(), RunError> {
         self.vue.perdre(g.gpu());
         self.miniatures.liberer(g.gpu());
@@ -1732,6 +1769,9 @@ impl Application for Monteur {
     }
 
     fn frame(&mut self, context: &mut FrameContext<'_>) -> Result<(), RunError> {
+        if self.quitter {
+            context.request_exit();
+        }
         if let Some(mut s) = self.scenario.take() {
             let fin = s.avancer(self);
             self.scenario = Some(s);
@@ -2131,6 +2171,7 @@ impl Application for Monteur {
         self.boite_projet(ui);
         self.boite_corbeille(ui);
         self.boite_modele(ui);
+        self.boite_quitter(ui);
         self.boite_ce_qu_il_faut(ui);
         self.boite_a_propos(ui);
         self.suivre_telechargement();

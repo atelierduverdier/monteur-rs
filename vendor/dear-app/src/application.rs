@@ -493,6 +493,18 @@ impl EventContext<'_> {
     pub fn request_exit(&mut self) {
         *self.exit_requested = true;
     }
+
+    /// Monteur VerdierCAM (23/11/2026) : la sortie est demandée par cet événement (la fenêtre principale qu'on ferme).
+    #[must_use]
+    pub fn exit_requested(&self) -> bool {
+        *self.exit_requested
+    }
+
+    /// Monteur VerdierCAM (23/11/2026) : refuse la sortie demandée par cet événement, le temps d'une confirmation
+    /// (un téléchargement en cours). L'application quitte ensuite par `FrameContext::request_exit`.
+    pub fn cancel_exit(&mut self) {
+        *self.exit_requested = false;
+    }
 }
 
 /// Terminal resource capabilities without Context or frame ownership.

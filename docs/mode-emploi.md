@@ -30,7 +30,9 @@ La boîte **Ce qu'il faut** dit ce que le Monteur a trouvé : de quoi lire et re
 et où est VerdierCAM. Ce qui manque y a son bouton :
 
 - **Modèle des sous-titres** : « Télécharger… » apporte le modèle de Whisper (575 Mo, une seule fois). Les
-  sous-titres se font ensuite sur ton ordinateur, rien n'est envoyé nulle part.
+  sous-titres se font ensuite sur ton ordinateur, rien n'est envoyé nulle part. L'avancement s'affiche en bas de la
+  fenêtre et dans cette boîte. Si tu fermes le Monteur pendant le téléchargement, il te le demande d'abord ; arrêté, le
+  téléchargement reprendra où il en était la fois suivante.
 - **VerdierCAM** : s'il n'est pas trouvé tout seul, « Choisir… » et montre-lui le programme.
 
 On la rouvre par Aide › Ce qu'il faut.
