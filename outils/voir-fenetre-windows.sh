@@ -24,8 +24,10 @@ python3 -c "import time;time.sleep(3)"
 dbus-update-activation-environment WAYLAND_DISPLAY="$D/run/t" DISPLAY= 2>/dev/null
 # Sans DISPLAY, Wine prend son pilote Wayland. mscoree et mshtml coupés : pas de demande de Mono ni de Gecko ;
 # winemenubuilder coupé : rien dans le menu du bureau.
+# Sous Windows le Monteur dessine en DirectX 12 (main.rs) ; Wine, lui, a toujours été essayé en Vulkan : WGPU_BACKEND.
 AVEC_WINE=(env -u DISPLAY WAYLAND_DISPLAY="$D/run/t" HOME="$W" XDG_CONFIG_HOME="$W/.config" XDG_DATA_HOME="$W/.local/share"
-      WINEPREFIX="$W/.wine" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree=d;mshtml=d;winemenubuilder.exe=d")
+      WINEPREFIX="$W/.wine" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree=d;mshtml=d;winemenubuilder.exe=d"
+      WGPU_BACKEND="${WGPU_BACKEND:-vulkan}")
 "${AVEC_WINE[@]}" MONTEUR2_SCENARIO="$SC" wine "$EXE" "$PRISES" >"$D/app.log" 2>&1 &
 A=$!
 for s in "$@"; do

@@ -79,6 +79,17 @@ la vignette, Voix › écouter avant/après, Rendre, mettre une prise à la corb
 
 **Pas sous Windows** : le nanoKONTROL2. Les sous-titres et YouTube : lot 4, dans [portabilite.md](portabilite.md).
 
+**Le PC de l'atelier, 23/11/2026** (Windows 11 25H2, Iris Pro 580, pilote Intel de 2020 ; `ssh christophe@192.168.1.156`,
+le Monteur dans `Documents\Monteur-VerdierCAM-0.1.0-windows-x64`, raccourci au menu Démarrer).
+- **Le premier lancement a planté** au bout d'une seconde, dans `igvk64.dll` (0xc0000005), le pilote Vulkan d'Intel,
+  sur lequel VerdierCAM-Diagnostic butait déjà. Le Monteur demandait toutes les interfaces graphiques (`Backends::PRIMARY`),
+  et le seul fait d'interroger ce Vulkan le tuait.
+- **Depuis, sous Windows, DirectX 12 seul** (`main.rs`) : il tient sur ce PC, en `D3D12` sur `igd12umd64.dll`.
+- `WGPU_BACKEND` (vulkan, dx12, gl) change l'interface pour un essai. `voir-fenetre-windows.sh` garde Vulkan sous Wine,
+  comme avant.
+- **Lancer dans la session de Christophe depuis SSH** : un programme lancé par SSH n'a pas d'écran. Il faut une tâche
+  planifiée `Interactive` (`-UserId (whoami)`), lancée puis effacée aussitôt.
+
 ## La signature (23/11/2026)
 
 Sans signature, SmartScreen arrête le Monteur au premier lancement (« Windows a protégé votre ordinateur — Éditeur :

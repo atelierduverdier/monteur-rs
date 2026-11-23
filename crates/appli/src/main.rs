@@ -2256,12 +2256,21 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // LE PILOTE GRAPHIQUE SOUS WINDOWS (23/11/2026, PC de l'atelier, Iris Pro 580, pilote Intel de 2020) : le Monteur
+    // demandait toutes les interfaces à la fois, Vulkan compris, et le seul fait d'interroger le Vulkan d'Intel le
+    // faisait planter dans igvk64.dll (0xc0000005) avant la première image — VerdierCAM-Diagnostic y bute aussi. Sous
+    // Windows, DirectX 12 seul : tout Windows 10 ou 11 l'a. WGPU_BACKEND (vulkan, dx12, gl…) le change pour un essai.
+    let mut graphisme = WgpuConfig::from_preset(WgpuPreset::HighPerformance);
+    if cfg!(windows) {
+        graphisme.backends = wgpu::Backends::DX12;
+    }
+    graphisme.backends = graphisme.backends.with_env();
     let config = AppConfig {
         window_title: "Monteur VerdierCAM".to_string(),
         window_size: (1640.0, 1000.0),
         present_mode: wgpu::PresentMode::Fifo,
         clear_color: charte::c(charte::BG_CANVAS),
-        wgpu: WgpuConfig::from_preset(WgpuPreset::HighPerformance),
+        wgpu: graphisme,
         docking: DockingConfig::application_managed(),
         ini_filename: None,
         redraw: RedrawMode::Poll,
