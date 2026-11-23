@@ -263,6 +263,16 @@ impl WindowState {
                 })
                 .map_err(RunError::WindowCreation)?,
         );
+        // Monteur VerdierCAM (23/11/2026, PC de l'atelier en 1920 × 1080) : la fenêtre de 1640 × 1000, posée par
+        // Windows sous le haut de l'écran, finissait sous la barre des tâches, la barre d'état du Monteur (l'avancement
+        // d'un téléchargement, d'un rendu) hors de vue. Quand elle ne tient pas sur l'écran avec de la marge, agrandie.
+        // Sous Wayland l'écran n'est pas connu ici : rien ne change.
+        if let Some(ecran) = window.current_monitor() {
+            let (e, f) = (ecran.size(), window.outer_size());
+            if f.width + 100 > e.width || f.height + 100 > e.height {
+                window.set_maximized(true);
+            }
+        }
         let surface = instance
             .create_surface(window.clone())
             .map_err(RunError::SurfaceCreation)?;

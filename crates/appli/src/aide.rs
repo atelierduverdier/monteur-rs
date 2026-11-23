@@ -68,8 +68,15 @@ impl crate::Monteur {
         let whisper = noyau::systeme::trouver_programme("whisper-cli");
         ligne(ui, whisper.is_some(), "Sous-titres", &if whisper.is_some() { ou(whisper) } else { "whisper-cli introuvable : pas de sous-titres".into() });
         let modele = noyau::sous_titres::trouver_modele();
-        ligne(ui, modele.is_some(), "Modèle des sous-titres", &if modele.is_some() { ou(modele.clone()) } else { "à télécharger (575 Mo)".into() });
-        if modele.is_none() {
+        // L'avancement ici aussi (23/11/2026, Christophe : « je n'ai plus d'info pour savoir si ça charge ou pas ») : la
+        // barre d'état n'est pas toujours en vue.
+        let detail = match (&modele, &self.telechargement) {
+            (Some(_), _) => ou(modele.clone()),
+            (None, Some(t)) => format!("téléchargement en cours : {:.0} % de 575 Mo", t.avance() * 100.0),
+            (None, None) => "à télécharger (575 Mo)".into(),
+        };
+        ligne(ui, modele.is_some(), "Modèle des sous-titres", &detail);
+        if modele.is_none() && self.telechargement.is_none() {
             ui.same_line();
             if ui.small_button("Télécharger…") && self.telechargement.is_none() {
                 ui.close_current_popup();

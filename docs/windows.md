@@ -87,6 +87,11 @@ le Monteur dans `Documents\Monteur-VerdierCAM-0.1.0-windows-x64`, raccourci au m
 - **Depuis, sous Windows, DirectX 12 seul** (`main.rs`) : il tient sur ce PC, en `D3D12` sur `igd12umd64.dll`.
 - `WGPU_BACKEND` (vulkan, dx12, gl) change l'interface pour un essai. `voir-fenetre-windows.sh` garde Vulkan sous Wine,
   comme avant.
+- **La fenêtre ne tenait pas sur l'écran.** En 1920 × 1080, celle de 1640 × 1000, posée par Windows sous le haut de
+  l'écran, finissait sous la barre des tâches. La barre d'état, où s'affiche l'avancement du modèle des sous-titres,
+  était hors de vue : « je n'ai plus d'info pour savoir si ça charge ». Désormais la fenêtre s'agrandit quand elle ne
+  tient pas sur l'écran avec 100 px de marge (`vendor/dear-app`, `state.rs`), et Aide › Ce qu'il faut montre aussi
+  l'avancement.
 - **Lancer dans la session de Christophe depuis SSH** : un programme lancé par SSH n'a pas d'écran. Il faut une tâche
   planifiée `Interactive` (`-UserId (whoami)`), lancée puis effacée aussitôt.
 
