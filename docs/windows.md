@@ -74,12 +74,58 @@ image clé, là où le 9.1 de Linux rend une image. La bande d'images se redeman
 
 Wine ne remplace pas Windows (pilote graphique, WASAPI, corbeille, dialogue de fichiers). La VM `win-test`
 réserve 16 Go, n'a ni lecteur CD ni agent invité : le zip y entre par le réseau ou une clé USB. Une fois déballé
-où l'on veut, double-cliquer `monteur2.exe`, puis : ouvrir une prise OBS, Préparer, poser un zoom, écrire la
-vignette, Voix › écouter avant/après, Rendre, mettre une prise à la corbeille, Ouvrir le dossier.
+où l'on veut, double-cliquer « Monteur VerdierCAM.exe », puis : ouvrir une prise OBS, Préparer, poser un zoom, écrire
+la vignette, Voix › écouter avant/après, Rendre, mettre une prise à la corbeille, Ouvrir le dossier.
 
 **Pas sous Windows** : le nanoKONTROL2. Les sous-titres et YouTube : lot 4, dans [portabilite.md](portabilite.md).
-Le `.exe` n'a pas encore d'icône et n'est pas signé : SmartScreen avertira au premier lancement d'un zip téléchargé
-(VerdierCAM signe les siens).
+
+## La signature (23/11/2026)
+
+Sans signature, SmartScreen arrête le Monteur au premier lancement (« Windows a protégé votre ordinateur — Éditeur :
+inconnu »), les antivirus le retiennent, et Smart App Control de Windows 11 refuse chaque DLL qui n'est ni signée ni
+connue de Microsoft (« Image incorrecte », 0xc0e90002). VerdierCAM a payé les trois ; sa doc Windows
+(`verdiercam-imgui/docs/windows.md`, « L'avertissement de SmartScreen », « Smart App Control ») en garde le détail.
+
+`outils/construire-windows.sh` signe comme VerdierCAM, avec ses variables, pour qu'un seul certificat signe les deux :
+
+```bash
+VCAM_SIGNATURE_PFX=<certificat.pfx> VCAM_SIGNATURE_MOT_DE_PASSE_FICHIER=<fichier du mot de passe> outils/construire-windows.sh
+```
+
+Chaque `.exe` et chaque DLL du dossier (30 fichiers : le Monteur, ffmpeg, ffprobe, whisper-cli, FFmpeg, ggml,
+libc++…), par `osslsigncode` (paquet AUR `osslsigncode`, absent du poste aujourd'hui), en SHA-256, au nom de « Monteur
+VerdierCAM », horodaté chez Sectigo. Chaque fichier signé est relu (`osslsigncode verify`) : un seul qui ne se vérifie
+pas, et le paquet est refusé. Sans certificat, le paquet sort non signé et le dit ; `LISEZMOI.txt` dit toujours quoi
+cliquer devant SmartScreen, car un programme signé mais neuf peut encore être averti tant que sa signature n'a pas de
+réputation. `VCAM_SIGNATURE_HORODATAGE=` (vide) signe sans horodatage, pour un essai hors réseau avec un certificat
+jetable.
+
+**Essayé le 23/11/2026**, sur le vrai paquet, avec un certificat fait pour l'occasion (« CN=Atelier du Verdier
+Essai », RSA 3072, clé détruite aussitôt). L'outil était `osslsigncode` 2.2 d'Ubuntu 22.04, déballé à part ; la
+`libcurl-gnutls` qu'il demande manque à Arch, une bibliothèque factice de neuf fonctions vides l'a remplacée, l'essai
+étant sans horodatage. Résultats :
+
+- les 30 fichiers sont signés, et chacun se vérifie une fois sorti du zip ;
+- un octet changé dans le `.exe` signé, la vérification échoue ;
+- quand la vérification échoue (certificat non reconnu), le script refuse le paquet dès la première DLL, sans zip ;
+- quand une signature est demandée sans `osslsigncode`, le script refuse aussi ;
+- le `.exe` signé ne diffère du construit que par sa somme de contrôle, l'entrée « Security » et la signature
+  ajoutée au bout, l'icône intacte ;
+- sous Wine, `ffprobe.exe` et `whisper-cli.exe` signés se lancent avec leurs DLL signées.
+
+Le paquet de `dist/` a été reconstruit non signé ensuite. **Pas essayé** : l'horodatage chez Sectigo, et un Windows
+devant un certificat reconnu.
+
+**Le jour de l'achat, à adapter ici comme dans VerdierCAM.** Depuis juin 2023, aucune autorité ne remet plus le
+certificat en `.pfx` : la clé vit sur un jeton USB ou dans le nuage de l'autorité. La branche `.pfx` ne sert donc
+qu'avec un certificat d'essai ; un vrai certificat passe par le module PKCS#11 du jeton ou de l'autorité
+(`osslsigncode sign -pkcs11module …`).
+
+**Ce que le Monteur peut prendre et pas VerdierCAM** : le certificat « Open Source Code Signing » de Certum. Il ne
+convient pas à VerdierCAM, qui est vendu, mais le Monteur est libre et gratuit. Il est délivré au nom du développeur
+(« Open Source Developer, … »), vaut un an, et garde sa clé dans le nuage SimplySign, que l'on ouvre par une
+application sur le téléphone. Le prix et les pièces demandées sont à revérifier chez Certum avant d'acheter. Ce
+certificat ne signerait que le Monteur : pour les deux, il faut un certificat OV.
 
 ## Filmer sous Windows (lot 3, 22/11/2026)
 

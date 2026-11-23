@@ -88,3 +88,5 @@ eux-mêmes. Chez Christophe, `youtube-envoi` est là : rien ne change.
   décoché, comme le fondu. Sans carton, la commande de montage reste celle du Monteur 1 (contrôlé). Essayé : 3 s de
   vignette + 8 s de prise + 2 s de carton = 13,0 s, l'image de travail du carton effacée.
 - **Le paquet Linux** : [linux.md](linux.md).
+- **La signature du paquet Windows** (23/11/2026), comme VerdierCAM et avec ses variables : chaque `.exe` et chaque
+  DLL, dès qu'un certificat existe ([windows.md](windows.md), « La signature »).

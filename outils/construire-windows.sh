@@ -91,6 +91,33 @@ done
 python3 "$DEPOT/outils/verifier-dll-windows.py" "$OBJDUMP" "$SORTIE" \
     || { echo "Paquet refusé : des symboles importés n'existent pas dans les DLL du paquet." >&2; exit 1; }
 
+# 3 bis. LA SIGNATURE AUTHENTICODE, comme VerdierCAM (outils/construire-windows.sh de verdiercam-imgui, 14 et
+# 29/10/2026) : SmartScreen arrête un .exe non signé (« Windows a protégé votre ordinateur »), Smart App Control de
+# Windows 11 refuse chaque DLL non signée (« Image incorrecte », 0xc0e90002). Les mêmes variables que VerdierCAM, pour
+# qu'un seul certificat signe les deux :
+#   VCAM_SIGNATURE_PFX=<fichier.pfx>  VCAM_SIGNATURE_MOT_DE_PASSE_FICHIER=<fichier>   (le mot de passe, jamais en clair)
+# Sans eux, le paquet sort non signé, et le dit. VCAM_SIGNATURE_HORODATAGE change le serveur d'horodatage (vide : sans
+# horodatage, pour un essai hors réseau avec un certificat jetable ; une signature non horodatée meurt avec le
+# certificat). Tous les .exe et toutes les DLL du dossier, ffmpeg, whisper et ggml compris.
+HORODATAGE="${VCAM_SIGNATURE_HORODATAGE-http://timestamp.sectigo.com}"
+if [[ -n "${VCAM_SIGNATURE_PFX:-}" ]]; then
+    command -v osslsigncode >/dev/null || { echo "signature demandée, mais osslsigncode manque (paquet AUR osslsigncode)" >&2; exit 1; }
+    [[ -r "$VCAM_SIGNATURE_PFX" ]] || { echo "VCAM_SIGNATURE_PFX : certificat illisible" >&2; exit 1; }
+    [[ -r "${VCAM_SIGNATURE_MOT_DE_PASSE_FICHIER:-}" ]] || { echo "VCAM_SIGNATURE_MOT_DE_PASSE_FICHIER : fichier du mot de passe illisible" >&2; exit 1; }
+    mapfile -d '' -t a_signer < <(find "$SORTIE" -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0 | sort -z)
+    for fichier in "${a_signer[@]}"; do
+        signe="${fichier%.*}.signe.${fichier##*.}"
+        osslsigncode sign -pkcs12 "$VCAM_SIGNATURE_PFX" -readpass "$VCAM_SIGNATURE_MOT_DE_PASSE_FICHIER" \
+            -n "Monteur VerdierCAM" -i "https://verdiercam.fr" -h sha256 ${HORODATAGE:+-t "$HORODATAGE"} \
+            -in "$fichier" -out "$signe" >/dev/null
+        mv "$signe" "$fichier"
+        osslsigncode verify -in "$fichier" >/dev/null || { echo "la signature de $fichier ne se vérifie pas" >&2; exit 1; }
+    done
+    echo "${#a_signer[@]} fichiers signés, les .exe et toutes les DLL (Authenticode${HORODATAGE:+, horodatés})"
+else
+    echo "Paquet NON signé : SmartScreen avertira au premier lancement, Smart App Control peut refuser ses DLL (VCAM_SIGNATURE_PFX pour signer)"
+fi
+
 # 4. Les licences : le Monteur (GPL, et la marque VerdierCAM à part), FFmpeg (GPL, avec x264), whisper.cpp (MIT),
 # llvm-mingw (libc++), les polices (OFL).
 cp "$DEPOT/LICENSE" "$SORTIE/licences/Monteur-VerdierCAM-GPL-3.0.txt"
@@ -104,6 +131,11 @@ cp "$DEPOT/ressources/polices/OFL-Inter.txt" "$DEPOT/ressources/polices/OFL-JetB
     echo
     echo "Tout ce qui est dans ce dossier sert au Monteur : ffmpeg.exe et ffprobe.exe pour l'image et le son,"
     echo "whisper-cli.exe pour les sous-titres. Le dossier se déplace en entier, n'importe où."
+    echo
+    echo "Au premier lancement, Windows peut afficher « Windows a protégé votre ordinateur » (SmartScreen) : un"
+    echo "programme récent, encore peu téléchargé, n'a pas de réputation. Cliquez « Informations complémentaires »,"
+    echo "puis « Exécuter quand même ». Si le zip venait d'Internet, vous pouvez aussi, avant de le décompresser :"
+    echo "clic droit sur le zip › Propriétés › cocher « Débloquer » › OK."
     echo
     echo "Logiciel libre, sous licence GPL version 3 ou suivante (licences/). Code source :"
     echo "https://github.com/atelierduverdier/monteur-rs"
