@@ -181,7 +181,8 @@ paquet qui ne se relit pas est effacé.
   changé, la vérification échoue.
 
 **Pas essayé : sur un vrai Windows.** Le paquet signé d'essai attend dans `dist/essai-msix/`, avec son certificat
-(« CN=Atelier du Verdier Essai », clé détruite, sans horodatage : la signature ne vaut que jusqu'au 23/12/2026).
+(« CN=Atelier du Verdier Essai », clé détruite, sans horodatage : la signature ne vaut que jusqu'au 23/12/2026). Il a
+été fait avant la demande de capture sans cadre (ci-dessous) : à refaire pour l'essayer.
 Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH, où `Add-AppxPackage` échoue) :
 
 1. dans un Terminal administrateur :
@@ -189,7 +190,8 @@ Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH,
 2. `Add-AppxPackage -Path Monteur-VerdierCAM-0.1.0-windows-x64.msix` ; le Monteur arrive au menu Démarrer ;
 3. à regarder :
    - Aide › Ce qu'il faut trouve ffmpeg et whisper-cli ;
-   - Filmer : Windows demande-t-il le micro, et le cadre jaune entoure-t-il la fenêtre filmée ?
+   - Filmer : Windows demande-t-il le micro ? Demande-t-il, une seule fois, de filmer sans cadre ? Une fois l'accord
+     donné, plus de cadre jaune autour de la fenêtre filmée ?
    - Filmer VerdierCAM (VerdierCAM choisi dans Ce qu'il faut) : changer un réglage de VerdierCAM pendant la prise, puis
      rouvrir VerdierCAM hors du Monteur, le réglage doit y être ; Préparer doit trouver les gestes ;
    - Télécharger le modèle ;
@@ -199,8 +201,17 @@ Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH,
 **Ce qu'on sait déjà devoir regarder** :
 - **Le cadre jaune** : un programme empaqueté n'a la capture sans cadre qu'après avoir demandé l'accord de
   l'utilisateur (`GraphicsCaptureAccess.RequestAccessAsync`, accès « Borderless »). Sinon Windows garde le cadre, sans
-  erreur. `windows-capture` ne fait pas cette demande. Si le cadre se voit, il faudra l'ajouter dans
-  `capture_windows.rs`, après l'essai.
+  erreur. `windows-capture` ne fait pas cette demande ; **le Monteur la fait depuis le 23/11/2026**
+  (`capture_windows.rs`, `demander_sans_cadre`).
+  - Quand : dès qu'on clique Filmer ou Filmer VerdierCAM.
+  - Comment : dans un fil à part, pour que la fenêtre ne se fige pas pendant que Windows pose sa question. Windows la
+    pose une fois, puis retient la réponse.
+  - Le démarrage de la prise attend la réponse une demi-seconde au plus, puis filme. La toute première prise peut donc
+    garder le cadre si la réponse arrive après la fin du décompte.
+  - Hors paquet (le zip), ou sur un Windows 10 qui n'a pas cette demande (avant le build 20348), elle échoue ou revient
+    accordée, et rien ne change. Peut-être pose-t-elle la question au zip aussi : à voir sur le PC.
+  - Sous Wine (sans cette capture) : la boîte « Quelle fenêtre filmer ? » s'ouvre comme avant, et le déroulé d'essai va
+    jusqu'au bout.
 - **Le Monteur et le VerdierCAM du Store** : le Monteur ne trouve pas encore un VerdierCAM installé par le Store
   (il faudrait son alias `verdiercam.exe`). Et un VerdierCAM empaqueté écrirait le journal des gestes dans sa copie à
   lui d'AppData, où le Monteur ne le lit pas. À régler dans le manifeste de VerdierCAM le jour où les deux sont au

@@ -714,6 +714,7 @@ impl Monteur {
                     self.capture_prevue = Some(std::time::Instant::now() + DELAI_VERDIERCAM);
                     #[cfg(windows)]
                     {
+                        capture::demander_sans_cadre();
                         self.verdiercam_lance = Some(std::time::Instant::now());
                     }
                 }
@@ -852,6 +853,7 @@ impl Monteur {
         if self.capture.is_some() || self.choix_fenetre.is_some() {
             return;
         }
+        capture::demander_sans_cadre();
         let jeton = chemin_jeton_portail();
         match (!simple).then(|| capture::fenetre_gardee(&jeton)).flatten() {
             Some(f) => self.commencer_capture(&f, simple),

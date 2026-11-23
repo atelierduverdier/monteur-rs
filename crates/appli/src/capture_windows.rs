@@ -7,9 +7,11 @@
 //! Filmer VerdierCAM prend celle de VerdierCAM dès qu'elle s'ouvre.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use windows::Graphics::Capture::{GraphicsCaptureAccess, GraphicsCaptureAccessKind};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -72,7 +74,43 @@ pub fn garder(chemin: &Path, f: &Fenetre) {
 
 /// Filmer `fenetre` : le bureau et le micro, chacun sur sa piste, mêlés à la fin.
 pub fn lancer(dossier: &Path, fenetre: &Fenetre, avec_decompte: bool) -> Result<Capture, String> {
+    demander_sans_cadre();
     Capture::lancer(dossier, demarrer(fenetre.hwnd), Sons { bureau: true, micro: true }, avec_decompte)
+}
+
+/// LA CAPTURE SANS CADRE JAUNE (23/11/2026, Christophe : « Ajoute la demande de capture sans cadre jaune »). Un
+/// programme empaqueté (le paquet du Store, outils/construire-msix.py) ne filme sans cadre qu'après l'accord de
+/// l'utilisateur : `GraphicsCaptureAccess.RequestAccessAsync(Borderless)`, que son manifeste permet
+/// (`graphicsCaptureWithoutBorder`). Sinon Windows accepte « sans cadre » sans erreur, mais garde le cadre.
+/// Windows pose la question une fois et retient la réponse ; les fois suivantes, elle revient tout de suite.
+///
+/// La demande part dès qu'on clique Filmer (ou Filmer VerdierCAM), dans un fil à elle : la fenêtre du Monteur ne se
+/// fige pas pendant que Windows pose sa question, et le décompte laisse le temps d'y répondre. `demarrer` attend la
+/// réponse une demi-seconde au plus (le cas d'une réponse déjà donnée), puis filme : sans réponse, avec le cadre.
+/// Hors paquet (le zip), ou sur un Windows 10 d'avant cette demande (build 20348), elle échoue ou revient accordée :
+/// rien ne change.
+static SANS_CADRE: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+
+pub fn demander_sans_cadre() {
+    let Ok(mut attente) = SANS_CADRE.lock() else { return };
+    if attente.is_some() {
+        return;
+    }
+    let (fini, recu) = std::sync::mpsc::channel();
+    *attente = Some(recu);
+    let _ = std::thread::Builder::new().name("capture-sans-cadre".into()).spawn(move || {
+        let _ = GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::Borderless).and_then(|demande| demande.join());
+        let _ = fini.send(());
+    });
+}
+
+/// Laisse à la demande, si elle court encore, une demi-seconde pour aboutir.
+fn attendre_sans_cadre() {
+    if let Ok(attente) = SANS_CADRE.lock()
+        && let Some(recu) = attente.as_ref()
+    {
+        let _ = recu.recv_timeout(Duration::from_millis(500));
+    }
 }
 
 /// La zone cliente de la fenêtre dans l'image filmée, qui couvre son cadre visible (DWM).
@@ -160,7 +198,8 @@ fn demarrer(hwnd: isize) -> Demarrer {
                 (dernier.clone(), hwnd),
             )
         };
-        // Sans le cadre jaune si Windows le permet (Windows 11), avec sinon.
+        // Sans le cadre jaune si Windows le permet (Windows 11, et l'accord donné pour le paquet du Store), avec sinon.
+        attendre_sans_cadre();
         let controle = Prendre::start_free_threaded(reglages(DrawBorderSettings::WithoutBorder))
             .or_else(|_| Prendre::start_free_threaded(reglages(DrawBorderSettings::Default)))
             .map_err(|e| format!("la capture de Windows refuse cette fenêtre ({e:?})"))?;
