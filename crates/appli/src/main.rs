@@ -309,9 +309,10 @@ fn chemin_voix() -> PathBuf {
     chemin_fiches().with_file_name("voix.json")
 }
 
-/// Linux : où le portail garde la fenêtre choisie. Windows : la fenêtre gardée par Filmer (programme et titre).
+#[cfg(windows)]
+/// Windows : la dernière fenêtre filmée (programme et titre), choisie d'avance dans la boîte du choix.
 fn chemin_jeton_portail() -> PathBuf {
-    chemin_fiches().with_file_name(if cfg!(windows) { "fenetre-capture" } else { "portail-capture" })
+    chemin_fiches().with_file_name("fenetre-capture")
 }
 
 /// Le niveau du micro : vert, orange près de saturer, rouge saturé.
@@ -802,9 +803,9 @@ impl Monteur {
             return;
         }
         let dossier = if simple { self.copies.clone() } else { self.dossier.chemin.clone() };
-        // Un enregistrement simple vise souvent une autre fenêtre que la dernière : on la redemande.
-        let jeton = chemin_jeton_portail();
-        match capture::Capture::lancer(&dossier, (!simple).then_some(jeton.as_path()), !simple) {
+        // Le dialogue du portail s'ouvre à chaque fois (23/11/2026) : reprendre la fenêtre gardée sans rien demander
+        // a fait filmer deux fois la mauvaise à Christophe.
+        match capture::Capture::lancer(&dossier, None, !simple) {
             Ok(c) => {
                 self.capture = Some(c);
                 self.capture_simple = simple;
@@ -852,21 +853,18 @@ impl Monteur {
         };
     }
 
-    /// Filmer reprend la fenêtre gardée ; un enregistrement simple, ou rien de gardé : la boîte du choix.
+    /// LA BOÎTE DU CHOIX À CHAQUE FOIS (23/11/2026). Filmer reprenait sans rien demander la fenêtre gardée, et pour
+    /// en changer il fallait Fichier › Filmer une autre fenêtre : Christophe a filmé deux fois la mauvaise (« ça me
+    /// prend la dernière fenêtre […] ce qui est complètement illogique »). La boîte s'ouvre donc toujours, la fenêtre
+    /// gardée déjà choisie : la même fenêtre, c'est Entrée ; une autre, un clic.
     #[cfg(windows)]
     fn lancer_capture(&mut self, simple: bool) {
         if self.capture.is_some() || self.choix_fenetre.is_some() {
             return;
         }
         capture::demander_sans_cadre();
-        let jeton = chemin_jeton_portail();
-        match (!simple).then(|| capture::fenetre_gardee(&jeton)).flatten() {
-            Some(f) => self.commencer_capture(&f, simple),
-            None => {
-                self.choix_fenetre = Some(capture::ChoixFenetre::nouveau(simple, Some(&jeton)));
-                self.message = "Choisis la fenêtre à filmer.".into();
-            }
-        }
+        self.choix_fenetre = Some(capture::ChoixFenetre::nouveau(simple, Some(&chemin_jeton_portail())));
+        self.message = "Choisis la fenêtre à filmer.".into();
     }
 
     #[cfg(windows)]
@@ -915,9 +913,9 @@ impl Monteur {
         let mut filmer = None;
         if let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() {
             ui.text_wrapped(if choix.simple {
-                "Enregistrement simple : la fenêtre se choisit à chaque fois, la vidéo va dans Copies d'écran."
+                "Enregistrement simple : la vidéo va dans Copies d'écran, sans décompte."
             } else {
-                "Le Monteur garde ce choix. Fichier › Filmer une autre fenêtre pour en changer."
+                "La fenêtre filmée la dernière fois est déjà choisie : Entrée pour la reprendre, ou clique sur une autre."
             });
             ui.spacing();
             ui.child_window("fenetres").size([680.0, 320.0]).border(true).build(ui, || {
@@ -934,7 +932,8 @@ impl Monteur {
                     ui.text_colored(charte::c(charte::TEXT_2), "Aucune fenêtre à filmer : ouvre-la, puis Actualiser.");
                 }
             });
-            if ui.button_with_size("Filmer##fenetre", [140.0, 30.0]) && choix.choisie.is_some() {
+            let entree = ui.is_key_pressed(Key::Enter) || ui.is_key_pressed(Key::KeypadEnter);
+            if (ui.button_with_size("Filmer##fenetre", [140.0, 30.0]) || entree) && choix.choisie.is_some() {
                 filmer = Some(true);
             }
             ui.same_line();
@@ -1245,7 +1244,7 @@ impl Monteur {
                 vu_metre(ui, db, c.micro_muet());
             }
         } else {
-            if outil(ui, "##filmer", Icone::Filmer, "Filmer une fenêtre", charte::ERREUR, Allure::Simple, "Filme la fenêtre de ton choix, sans les gestes de VerdierCAM. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer ; Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
+            if outil(ui, "##filmer", Icone::Filmer, "Filmer une fenêtre", charte::ERREUR, Allure::Simple, "Filme la fenêtre de ton choix, sans les gestes de VerdierCAM. Le choix des fenêtres s'ouvre à chaque fois. La prise arrive dans la liste. Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
                 self.capture_prevue = None;
                 self.filmer_ecran();
             }
@@ -1984,11 +1983,6 @@ impl Application for Monteur {
                     self.fenetre_rendre = true;
                 }
                 ui.separator();
-                let jeton = chemin_jeton_portail();
-                if ui.menu_item_enabled_selected_no_shortcut("Filmer une autre fenêtre…", false, self.capture.is_none()) {
-                    let _ = std::fs::remove_file(&jeton);
-                    self.filmer_ecran();
-                }
                 // Hors du ruban depuis le 23/11/2026 : il y doublait « Filmer une fenêtre » (Christophe : « j'ai
                 // l'impression que 2 font double emploi »). Il reste ici, pour une vidéo vite faite d'un bug.
                 if ui.menu_item_enabled_selected_no_shortcut("Enregistrement simple…", false, self.capture.is_none()) {

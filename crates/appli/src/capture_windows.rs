@@ -3,8 +3,8 @@
 //! la zone cliente : sans barre de titre ni bords, comme sous KDE, et c'est là que VerdierCAM note ses gestes.
 //! `enregistreur.rs` fait le reste : le rythme, l'encodage, le son du bureau et le micro, la prise rangée.
 //!
-//! La fenêtre se choisit dans le Monteur (`ChoixFenetre`) ; Filmer la garde (`fenetre-capture`, à côté des fiches),
-//! Filmer VerdierCAM prend celle de VerdierCAM dès qu'elle s'ouvre.
+//! La fenêtre se choisit dans le Monteur (`ChoixFenetre`), à chaque fois, la dernière filmée déjà choisie
+//! (`fenetre-capture`, à côté des fiches) ; Filmer VerdierCAM prend celle de VerdierCAM dès qu'elle s'ouvre.
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
@@ -55,7 +55,7 @@ pub fn fenetre_du_programme(programme: &str) -> Option<Fenetre> {
     fenetres().into_iter().find(|f| f.programme.eq_ignore_ascii_case(programme))
 }
 
-/// La fenêtre gardée par Filmer, si elle est encore ouverte : la même, ou à défaut une du même programme (le titre de
+/// La dernière fenêtre filmée, si elle est encore ouverte : la même, ou à défaut une du même programme (le titre de
 /// VerdierCAM change avec le projet ouvert).
 pub fn fenetre_gardee(chemin: &Path) -> Option<Fenetre> {
     let texte = std::fs::read_to_string(chemin).ok()?;
@@ -220,8 +220,7 @@ pub struct ChoixFenetre {
 impl ChoixFenetre {
     pub fn nouveau(simple: bool, gardee: Option<&Path>) -> Self {
         let fenetres = fenetres();
-        let precedente = gardee.and_then(|g| std::fs::read_to_string(g).ok()).and_then(|t| t.lines().next().map(str::to_string));
-        let choisie = precedente.and_then(|p| fenetres.iter().position(|f| f.programme.eq_ignore_ascii_case(&p)));
+        let choisie = gardee.and_then(fenetre_gardee).and_then(|g| fenetres.iter().position(|f| f.hwnd == g.hwnd));
         Self { fenetres, simple, choisie, ouverte: false }
     }
 

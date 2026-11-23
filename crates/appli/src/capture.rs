@@ -83,7 +83,7 @@ fn meler_le_son(brut: &Path, sortie: &Path) -> Result<(), String> {
 
 impl Capture {
     /// `jeton` : où le portail garde la fenêtre choisie, pour ne pas la redemander. `None` : le
-    /// dialogue s'ouvre, et ce choix-là ne remplace pas la fenêtre gardée.
+    /// dialogue s'ouvre (le Monteur passe toujours `None` depuis le 23/11/2026 : la fenêtre se choisit à chaque fois).
     /// `avec_decompte` : les trois bips avant de filmer.
     pub fn lancer(dossier: &Path, jeton: Option<&Path>, avec_decompte: bool) -> Result<Self, String> {
         let programme = std::env::var_os("MONTEUR2_ECRAN").unwrap_or_else(|| "gpu-screen-recorder".into());

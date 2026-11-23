@@ -44,11 +44,11 @@ Deux boutons dans le ruban :
 - **Filmer VerdierCAM** (le meilleur) : le Monteur lance VerdierCAM et filme sa fenêtre. VerdierCAM note alors
   chacun de tes gestes (clics, réglages, boîtes ouvertes) : c'est d'eux que naissent les zooms et les étiquettes.
 - **Filmer une fenêtre** : la fenêtre de ton choix, sans gestes notés (même si c'est celle de VerdierCAM : seul le
-  bouton d'à côté les fait noter). Le Monteur garde ce choix pour la fois suivante (Fichier › Filmer une autre
-  fenêtre pour en changer).
+  bouton d'à côté les fait noter). La liste des fenêtres s'ouvre à chaque fois ; sous Windows, celle filmée la
+  dernière fois y est déjà choisie : Entrée pour la reprendre.
 
 Et dans le menu Fichier, **Enregistrement simple** : une vidéo vite faite, sans décompte ni préparation, toujours
-dans Copies d'écran, la fenêtre redemandée à chaque fois.
+dans Copies d'écran.
 
 Trois bips annoncent la première image : ils ne sont pas filmés. Pendant la prise, le vu-mètre montre ton micro
 (« Micro muet ? » s'il ne reçoit rien). Pour arrêter : le bouton **Arrêter**, ou **Windows+F12** (Meta+F12 sous

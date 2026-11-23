@@ -4,13 +4,12 @@ Sous Linux, ci-dessous. Sous Windows, une autre capture, même résultat : [wind
 Windows ».
 
 Bouton **Filmer…** du ruban : le Monteur lance `gpu-screen-recorder`, qui passe par le portail de
-KDE, le même dialogue qu'OBS pour choisir la fenêtre. Le choix est gardé dans
-`~/.local/share/monteur/portail-capture` ; Fichier › Filmer une autre fenêtre l'oublie.
+KDE, le même dialogue qu'OBS pour choisir la fenêtre, à chaque fois (`-restore-portal-session no`). Jusqu'au
+23/11/2026 le choix était gardé et repris sans rien demander : Christophe a filmé deux fois la mauvaise fenêtre.
 **Filmer VerdierCAM…** lance VerdierCAM puis, 4 s plus tard, l'enregistrement : le dialogue ne liste
 que les fenêtres déjà ouvertes.
 
-**Enregistrement simple** (menu Fichier depuis le 23/11/2026 : dans le ruban, il doublait Filmer) ne reprend pas la fenêtre gardée : le dialogue s'ouvre à chaque fois, et ce
-choix ne remplace pas celle de Filmer.
+**Enregistrement simple** (menu Fichier depuis le 23/11/2026 : dans le ruban, il doublait Filmer) : sans décompte, dans Copies d'écran.
 
 La vidéo s'écrit dans le dossier affiché sous `capture ….partiel.mp4`, que la liste ignore. À l'arrêt,
 elle prend le nom d'OBS (`2026-11-05 07-47-00.mp4`) à l'instant de sa première image, lu dans le `.ts`
