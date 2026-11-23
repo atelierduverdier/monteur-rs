@@ -181,8 +181,8 @@ paquet qui ne se relit pas est effacé.
   changé, la vérification échoue.
 
 **Pas essayé : sur un vrai Windows.** Le paquet signé d'essai attend dans `dist/essai-msix/`, avec son certificat
-(« CN=Atelier du Verdier Essai », clé détruite, sans horodatage : la signature ne vaut que jusqu'au 23/12/2026). Il a
-été fait avant la demande de capture sans cadre (ci-dessous) : à refaire pour l'essayer.
+(« CN=Atelier du Verdier Essai », clé détruite, sans horodatage : la signature ne vaut que jusqu'au 23/12/2026). Refait
+le 23/11/2026 avec la demande de capture sans cadre (ci-dessous), avec un certificat neuf.
 Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH, où `Add-AppxPackage` échoue) :
 
 1. dans un Terminal administrateur :
@@ -196,7 +196,7 @@ Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH,
      rouvrir VerdierCAM hors du Monteur, le réglage doit y être ; Préparer doit trouver les gestes ;
    - Télécharger le modèle ;
 4. puis `Get-AppxPackage AtelierDuVerdier.MonteurVerdierCAM | Remove-AppxPackage`, et
-   `Remove-Item Cert:\LocalMachine\TrustedPeople\4AB4A6562C68DFB953E3B3B3E8622CFB98647F50`.
+   `Remove-Item Cert:\LocalMachine\TrustedPeople\7D68A038E8EA75D5EECF20E0BA6A66D45D1AD73D`.
 
 **Ce qu'on sait déjà devoir regarder** :
 - **Le cadre jaune** : un programme empaqueté n'a la capture sans cadre qu'après avoir demandé l'accord de
