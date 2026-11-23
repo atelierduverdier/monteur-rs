@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LE MANIFESTE DU PAQUET MSIX DU MONTEUR (23/11/2026, outils/construire-msix.py le remplit ; celui de VerdierCAM,
+     verdiercam-imgui/outils/windows/AppxManifest.xml.in, pour modèle). Le Monteur y est un programme de bureau ordinaire
+     (runFullTrust), comme dans le zip. @NOM@, @EDITEUR@ et @EDITEUR_NOM@ viennent de l'Espace partenaires de Microsoft
+     (la fiche du produit, « Identité du produit ») ; @VERSION@ est celle de crates/appli/Cargo.toml suivie de « .0 »
+     (le Store refuse un quatrième chiffre autre que 0).
+
+     CE QUI NE VA PAS DE SOI (docs/windows.md, « Le Microsoft Store ») :
+     - Les écritures ne sont PAS détournées (desktop6, unvirtualizedResources). Un paquet ordinaire range chaque écriture
+       dans AppData et la base de registre dans une copie à lui, et les processus qu'il lance aussi. Or le Monteur lance
+       VerdierCAM, qui écrit ses réglages, son essai (dans la base de registre) et le journal des gestes que le Monteur
+       relit : détournés, les réglages changés pendant une prise resteraient dans le paquet du Monteur. Le Monteur du
+       Store écrit donc où écrit celui du zip, et partage avec lui ses réglages et le modèle des sous-titres ; ils
+       restent après la désinstallation, comme ceux du zip.
+     - La capture (uap11) : un programme empaqueté qui filme une fenêtre par Windows.Graphics.Capture le déclare, et
+       sans « graphicsCaptureWithoutBorder » Windows garde le cadre jaune autour de la fenêtre filmée.
+     - Le micro (DeviceCapability) : sans lui, le Monteur n'apparaît pas dans Paramètres › Confidentialité › Microphone.
+     - Windows 10 2004 au moins (19041) : les déclarations desktop6 en demandent 1903, la capture sans cadre Windows 11. -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap11="http://schemas.microsoft.com/appx/manifest/uap/windows10/11"
+         xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap11 desktop6 rescap">
+  <Identity Name="@NOM@" Publisher="@EDITEUR@" Version="@VERSION@" ProcessorArchitecture="x64"/>
+  <Properties>
+    <DisplayName>Monteur VerdierCAM</DisplayName>
+    <PublisherDisplayName>@EDITEUR_NOM@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Filme VerdierCAM et prépare tout seul le montage de la vidéo, prête pour YouTube</Description>
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/>
+  </Dependencies>
+  <Resources>
+    <Resource Language="fr-FR"/>
+  </Resources>
+  <Applications>
+    <Application Id="Monteur" Executable="Monteur VerdierCAM.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Monteur VerdierCAM" Description="Filme VerdierCAM et prépare tout seul le montage de la vidéo"
+                          BackgroundColor="#121214" Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"/>
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <!-- Le modèle des sous-titres à télécharger, YouTube Studio. -->
+    <Capability Name="internetClient"/>
+    <rescap:Capability Name="runFullTrust"/>
+    <rescap:Capability Name="unvirtualizedResources"/>
+    <uap11:Capability Name="graphicsCaptureProgrammatic"/>
+    <uap11:Capability Name="graphicsCaptureWithoutBorder"/>
+    <DeviceCapability Name="microphone"/>
+  </Capabilities>
+</Package>

@@ -90,3 +90,5 @@ eux-mêmes. Chez Christophe, `youtube-envoi` est là : rien ne change.
 - **Le paquet Linux** : [linux.md](linux.md).
 - **La signature du paquet Windows** (23/11/2026), comme VerdierCAM et avec ses variables : chaque `.exe` et chaque
   DLL, dès qu'un certificat existe ([windows.md](windows.md), « La signature »).
+- **Le paquet du Microsoft Store** (23/11/2026), comme VerdierCAM : un MSIX que le Store signe lui-même,
+  `outils/construire-msix.py` ([windows.md](windows.md), « Le Microsoft Store »).

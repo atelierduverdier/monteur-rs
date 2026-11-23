@@ -20,7 +20,8 @@ outils/construire-linux.sh
 Le premier fait `dist/Monteur-VerdierCAM-<version>-windows-x64.zip` (compilation croisée, ici, sous Linux :
 [docs/windows.md](docs/windows.md)) ; le second `dist/Monteur-VerdierCAM-<version>-linux-x86_64.AppImage`, dans un
 conteneur Ubuntu 22.04 ([docs/linux.md](docs/linux.md)). Chacun emporte FFmpeg, whisper-cli, le mode d'emploi et
-les licences.
+les licences. Après le premier, `python3 outils/construire-msix.py` fait le paquet du Microsoft Store, que le Store
+signe lui-même ([docs/windows.md](docs/windows.md), « Le Microsoft Store »).
 
 ## Lancer pour le développer
 

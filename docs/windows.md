@@ -127,6 +127,100 @@ convient pas à VerdierCAM, qui est vendu, mais le Monteur est libre et gratuit.
 application sur le téléphone. Le prix et les pièces demandées sont à revérifier chez Certum avant d'acheter. Ce
 certificat ne signerait que le Monteur : pour les deux, il faut un certificat OV.
 
+## Le Microsoft Store (23/11/2026)
+
+La voie sans certificat à acheter, la même que pour VerdierCAM. L'inscription d'un particulier à l'Espace partenaires
+est gratuite, et un paquet **MSIX** envoyé au Store y est **signé par Microsoft** après sa certification. SmartScreen et
+Smart App Control le laissent alors passer.
+
+```bash
+outils/construire-windows.sh
+```
+
+```bash
+python3 outils/construire-msix.py
+```
+
+→ `dist/Monteur-VerdierCAM-<version>-windows-x64.msix` (96 Mo, 43 fichiers, en 9 s), à côté du zip, qu'il ne
+remplace pas. Le format est celui de VerdierCAM, repris tel quel (`outils/construire-msix.py`, écrit en Python
+d'après le SDK MSIX de Microsoft). Le paquet est relu comme Windows le lira : CRC, empreinte de chaque bloc, chaque
+bloc qui se décomprime seul, un type pour chaque fichier, chaque programme et chaque image que cite le manifeste. Un
+paquet qui ne se relit pas est effacé.
+
+- **L'identité** : le Monteur est un produit à part dans l'Espace partenaires, du même compte que VerdierCAM.
+  `MONTEUR_MSIX_NOM` (son nom de paquet), `VCAM_MSIX_EDITEUR` et `VCAM_MSIX_EDITEUR_NOM` (les mêmes que pour
+  VerdierCAM). Sans elles, c'est un paquet d'essai, d'éditeur « CN=Atelier du Verdier Essai », que le Store refuserait.
+- **Le contenu** : tout le dossier du zip à la racine du paquet, sauf `LISEZMOI.txt`, qui ne parle que du zip.
+  Quatre vignettes sont tirées de l'icône.
+- **Les écritures ne sont pas détournées** (`desktop6:FileSystemWriteVirtualization` et `RegistryWriteVirtualization`
+  à `disabled`, capacité `unvirtualizedResources`). Un paquet ordinaire range dans une copie à lui tout ce qu'il écrit
+  dans AppData et la base de registre, et les programmes qu'il lance aussi. Or le Monteur lance VerdierCAM, qui écrit
+  ses réglages, son essai (dans la base de registre) et le journal des gestes. Détournés, les réglages changés pendant
+  une prise seraient restés dans le paquet du Monteur. Le Monteur du Store écrit donc où écrit celui du zip : il
+  partage avec lui ses réglages et le modèle des sous-titres, et les laisse après la désinstallation, comme le zip.
+- **La capture et le micro** : `graphicsCaptureProgrammatic` et `graphicsCaptureWithoutBorder` (uap11), et le micro
+  (`DeviceCapability microphone`), sans lequel le Monteur n'apparaîtrait pas dans Paramètres › Confidentialité ›
+  Microphone.
+- **Windows 10 2004 au moins** (19041), en français seulement.
+- **Valider le manifeste** : `VCAM_MSIX_SCHEMAS=~/Applications/chaine-windows-monteur/schemas-msix`. Ce sont les
+  54 schémas de `github.com/microsoft/msix-packaging` (`resources/AppxPackaging/Manifest/Schema`), empreintes git
+  vérifiées.
+- **Signer un paquet à installer à la main** : `VCAM_MSIX_PFX` et `VCAM_MSIX_MOT_DE_PASSE_FICHIER`, avec
+  osslsigncode 2.6 au moins. Non signé, Windows refuse de l'installer (0x80073D2B). `VCAM_SIGNATURE_HORODATAGE=`
+  (vide) signe sans horodatage. Le paquet envoyé au Store part, lui, non signé.
+
+**Essayé le 23/11/2026** :
+- le manifeste passe les schémas de Microsoft ;
+- trois sabotages sont refusés : une capacité inventée, le micro avant les capacités, une valeur hors liste ;
+- `unzip -t` ne trouve aucune erreur ;
+- une identité incomplète est refusée ;
+- l'identité du Store est prise dans le manifeste ;
+- saboté (blocs comprimés sans `Z_FULL_FLUSH`), le paquet est refusé, rien ne reste et le paquet d'avant est intact ;
+- une signature demandée sans osslsigncode est refusée ;
+- signé par osslsigncode 2.14 (le `.deb` d'Ubuntu, déballé à part puis effacé), le paquet se vérifie ; un octet
+  changé, la vérification échoue.
+
+**Pas essayé : sur un vrai Windows.** Le paquet signé d'essai attend dans `dist/essai-msix/`, avec son certificat
+(« CN=Atelier du Verdier Essai », clé détruite, sans horodatage : la signature ne vaut que jusqu'au 23/12/2026).
+Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH, où `Add-AppxPackage` échoue) :
+
+1. dans un Terminal administrateur :
+   `Import-Certificate -FilePath "Atelier du Verdier Essai.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople` ;
+2. `Add-AppxPackage -Path Monteur-VerdierCAM-0.1.0-windows-x64.msix` ; le Monteur arrive au menu Démarrer ;
+3. à regarder :
+   - Aide › Ce qu'il faut trouve ffmpeg et whisper-cli ;
+   - Filmer : Windows demande-t-il le micro, et le cadre jaune entoure-t-il la fenêtre filmée ?
+   - Filmer VerdierCAM (VerdierCAM choisi dans Ce qu'il faut) : changer un réglage de VerdierCAM pendant la prise, puis
+     rouvrir VerdierCAM hors du Monteur, le réglage doit y être ; Préparer doit trouver les gestes ;
+   - Télécharger le modèle ;
+4. puis `Get-AppxPackage AtelierDuVerdier.MonteurVerdierCAM | Remove-AppxPackage`, et
+   `Remove-Item Cert:\LocalMachine\TrustedPeople\4AB4A6562C68DFB953E3B3B3E8622CFB98647F50`.
+
+**Ce qu'on sait déjà devoir regarder** :
+- **Le cadre jaune** : un programme empaqueté n'a la capture sans cadre qu'après avoir demandé l'accord de
+  l'utilisateur (`GraphicsCaptureAccess.RequestAccessAsync`, accès « Borderless »). Sinon Windows garde le cadre, sans
+  erreur. `windows-capture` ne fait pas cette demande. Si le cadre se voit, il faudra l'ajouter dans
+  `capture_windows.rs`, après l'essai.
+- **Le Monteur et le VerdierCAM du Store** : le Monteur ne trouve pas encore un VerdierCAM installé par le Store
+  (il faudrait son alias `verdiercam.exe`). Et un VerdierCAM empaqueté écrirait le journal des gestes dans sa copie à
+  lui d'AppData, où le Monteur ne le lit pas. À régler dans le manifeste de VerdierCAM le jour où les deux sont au
+  Store : `unvirtualizedResources`, ou `$(KnownFolder:RoamingAppData)\monteur` exclu de la copie (Windows 11).
+
+**Le jour de l'envoi** :
+1. Dans l'Espace partenaires, créer le produit « Monteur VerdierCAM » (Nouveau produit › Application MSIX ou PWA), et
+   relever son identité.
+2. `MONTEUR_MSIX_NOM=… VCAM_MSIX_EDITEUR=… VCAM_MSIX_EDITEUR_NOM=… VCAM_MSIX_SCHEMAS=… python3 outils/construire-msix.py`.
+3. Justifier les deux capacités restreintes :
+   - `runFullTrust` : un programme de bureau qui lance ffmpeg et VerdierCAM ;
+   - `unvirtualizedResources` : VerdierCAM, lancé par le Monteur, garde ses réglages et le journal des gestes là où
+     il les écrit toujours.
+4. Remplir la fiche :
+   - gratuit ;
+   - logiciel libre, avec le lien du code ;
+   - une politique de confidentialité, sans doute demandée pour le micro (le Monteur n'envoie rien : la voix et les
+     sous-titres restent sur l'ordinateur), à vérifier dans les règles du Store au moment de l'envoi.
+5. La certification prend quelques jours, à chaque version.
+
 ## Filmer sous Windows (lot 3, 22/11/2026)
 
 Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Windows.Graphics.Capture (crate
