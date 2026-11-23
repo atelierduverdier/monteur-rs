@@ -190,7 +190,7 @@ Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH,
 2. `Add-AppxPackage -Path Monteur-VerdierCAM-0.1.0-windows-x64.msix` ; le Monteur arrive au menu Démarrer ;
 3. à regarder :
    - Aide › Ce qu'il faut trouve ffmpeg et whisper-cli ;
-   - Filmer : Windows demande-t-il le micro ? Demande-t-il, une seule fois, de filmer sans cadre ? Une fois l'accord
+   - Filmer une fenêtre : Windows demande-t-il le micro ? Demande-t-il, une seule fois, de filmer sans cadre ? Une fois l'accord
      donné, plus de cadre jaune autour de la fenêtre filmée ?
    - Filmer VerdierCAM (VerdierCAM choisi dans Ce qu'il faut) : changer un réglage de VerdierCAM pendant la prise, puis
      rouvrir VerdierCAM hors du Monteur, le réglage doit y être ; Préparer doit trouver les gestes ;
@@ -238,7 +238,7 @@ Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Wi
 `windows-capture`), `enregistreur.rs` fait la prise. Ce que ça donne :
 
 - **La fenêtre** se choisit dans la boîte « Quelle fenêtre filmer ? » (titre et programme). Filmer la garde
-  (`fenetre-capture`, à côté des fiches) ; Fichier › Filmer une autre fenêtre l'oublie ; Enregistrement simple la
+  (`fenetre-capture`, à côté des fiches) ; Fichier › Filmer une autre fenêtre l'oublie ; Enregistrement simple (menu Fichier) la
   redemande à chaque fois. **Filmer VerdierCAM** lance VerdierCAM et filme sa fenêtre (`VerdierCAM.exe`) dès qu'elle
   s'ouvre, sans rien demander ; 40 s sans fenêtre, il abandonne.
 - **L'image** : celle de la fenêtre même quand une autre passe devant, avec le pointeur, sans le cadre jaune
