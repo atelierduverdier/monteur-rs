@@ -2248,6 +2248,8 @@ impl Application for Monteur {
             r.suivi.arret.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = r.fil.join();
         }
+        // Un téléchargement en cours aussi : pas de curl orphelin (le morceau reçu reste, pour la reprise).
+        drop(self.telechargement.take());
         if self.fiches_sales {
             self.ecrire_fiches();
         }

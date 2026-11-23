@@ -152,9 +152,17 @@ impl Telechargement {
     }
 }
 
+/// ARRÊTÉ POUR DE BON (23/11/2026, PC de l'atelier, Christophe : « j'ai rallumé le Monteur, mais ça continuait à
+/// télécharger en arrière-plan ») : ne lever que le drapeau laissait le Monteur quitter avant que son fil ait tué curl,
+/// et sous Windows un programme lancé survit à celui qui l'a lancé. Le curl orphelin et celui du Monteur relancé
+/// écrivaient alors le même `.partiel`. On attend donc la fin du fil : curl tué (200 ms au plus), le morceau gardé
+/// pour la reprise.
 impl Drop for Telechargement {
     fn drop(&mut self) {
         self.arreter();
+        if let Some(fil) = self.fil.take() {
+            let _ = fil.join();
+        }
     }
 }
 
@@ -198,8 +206,8 @@ mod tests {
     }
 
     /// Un petit serveur HTTP qui sait reprendre (`Range: bytes=N-`) : il sert `donnees` et note d'où part chaque
-    /// demande.
-    fn serveur(donnees: Vec<u8>) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<u64>>>) {
+    /// demande. `lent` : 4 Kio toutes les 20 ms, un téléchargement qu'on a le temps d'interrompre.
+    fn serveur(donnees: Vec<u8>, lent: bool) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<u64>>>) {
         use std::io::{BufRead, BufReader, Write};
         let ecoute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = ecoute.local_addr().unwrap().port();
@@ -229,7 +237,16 @@ mod tests {
                 };
                 let mut flux = flux;
                 let _ = flux.write_all(entete.as_bytes());
-                let _ = flux.write_all(corps);
+                if lent {
+                    for morceau in corps.chunks(4096) {
+                        if flux.write_all(morceau).is_err() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                } else {
+                    let _ = flux.write_all(corps);
+                }
             }
         });
         (port, departs)
@@ -241,7 +258,7 @@ mod tests {
     fn reprend_ou_il_en_etait() {
         let donnees: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
         let sha = format!("{:x}", Sha256::digest(&donnees));
-        let (port, departs) = serveur(donnees.clone());
+        let (port, departs) = serveur(donnees.clone(), false);
         let entree: &'static [ATelecharger] = Box::leak(Box::new([ATelecharger {
             nom: "essai.bin",
             url: format!("http://127.0.0.1:{port}/essai.bin").leak(),
@@ -267,6 +284,38 @@ mod tests {
         assert!(matches!(fin, Some(Ok(()))), "{fin:?}");
         assert_eq!(*departs.lock().unwrap(), vec![100_000], "la suite seulement");
         assert!(recu == donnees && !partiel_reste);
+    }
+
+    /// ARRÊTÉ POUR DE BON : le Monteur fermé en plein téléchargement (le `Telechargement` lâché), curl est arrêté
+    /// avant que la fermeture rende la main — le `.partiel` ne grossit plus — et le morceau reste pour la reprise.
+    #[test]
+    fn curl_ne_survit_pas() {
+        let donnees: Vec<u8> = (0..2_000_000u32).map(|i| (i % 251) as u8).collect();
+        let sha = format!("{:x}", Sha256::digest(&donnees));
+        let (port, _) = serveur(donnees.clone(), true);
+        let entree: &'static [ATelecharger] = Box::leak(Box::new([ATelecharger {
+            nom: "lent.bin",
+            url: format!("http://127.0.0.1:{port}/lent.bin").leak(),
+            taille: donnees.len() as u64,
+            sha256: sha.leak(),
+        }]));
+        let d = std::env::temp_dir().join(format!("monteur-arret-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let partiel = d.join("lent.bin.partiel");
+        let t = Telechargement::lancer(entree, d.clone());
+        for _ in 0..250 {
+            if deja_recu(&partiel) > 50_000 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(t);
+        let a = deja_recu(&partiel);
+        std::thread::sleep(Duration::from_millis(600));
+        let b = deja_recu(&partiel);
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(a > 50_000 && a < donnees.len() as u64, "morceau reçu : {a}");
+        assert_eq!(a, b, "curl a continué après la fermeture");
     }
 
     /// Une adresse qui n'existe pas : une erreur claire, et pas de `.partiel` qui traîne.
