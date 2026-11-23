@@ -1240,14 +1240,9 @@ impl Monteur {
                 vu_metre(ui, db, c.micro_muet());
             }
         } else {
-            if outil(ui, "##filmer", Icone::Filmer, "Filmer", charte::ERREUR, Allure::Simple, "Filme une fenêtre, sans OBS. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer.") {
+            if outil(ui, "##filmer", Icone::Filmer, "Filmer une fenêtre", charte::ERREUR, Allure::Simple, "Filme la fenêtre de ton choix, sans les gestes de VerdierCAM. La prise arrive dans la liste. Fichier › Filmer une autre fenêtre pour en changer ; Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
                 self.capture_prevue = None;
                 self.filmer_ecran();
-            }
-            ui.same_line();
-            if outil(ui, "##simple", Icone::Filmer, "Enregistrement simple", charte::ALERTE, Allure::Simple, "Choisis la fenêtre à chaque fois. Toujours dans Copies d'écran, sans décompte ni préparation : le projet ouvert ne bouge pas.") {
-                self.capture_prevue = None;
-                self.filmer_simple();
             }
             ui.same_line();
             if outil(ui, "##verdier", Icone::Verdier, "Filmer VerdierCAM", t, Allure::Simple, "Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.") {
@@ -1953,6 +1948,12 @@ impl Application for Monteur {
                 if ui.menu_item_enabled_selected_no_shortcut("Filmer une autre fenêtre…", false, self.capture.is_none()) {
                     let _ = std::fs::remove_file(&jeton);
                     self.filmer_ecran();
+                }
+                // Hors du ruban depuis le 23/11/2026 : il y doublait « Filmer une fenêtre » (Christophe : « j'ai
+                // l'impression que 2 font double emploi »). Il reste ici, pour une vidéo vite faite d'un bug.
+                if ui.menu_item_enabled_selected_no_shortcut("Enregistrement simple…", false, self.capture.is_none()) {
+                    self.capture_prevue = None;
+                    self.filmer_simple();
                 }
                 if ui.menu_item_enabled_selected_no_shortcut("Mettre la prise à la corbeille…", false, self.prise.is_some())
                     && let Some(p) = &self.prise

@@ -9,7 +9,7 @@ KDE, le même dialogue qu'OBS pour choisir la fenêtre. Le choix est gardé dans
 **Filmer VerdierCAM…** lance VerdierCAM puis, 4 s plus tard, l'enregistrement : le dialogue ne liste
 que les fenêtres déjà ouvertes.
 
-**Enregistrement simple** ne reprend pas la fenêtre gardée : le dialogue s'ouvre à chaque fois, et ce
+**Enregistrement simple** (menu Fichier depuis le 23/11/2026 : dans le ruban, il doublait Filmer) ne reprend pas la fenêtre gardée : le dialogue s'ouvre à chaque fois, et ce
 choix ne remplace pas celle de Filmer.
 
 La vidéo s'écrit dans le dossier affiché sous `capture ….partiel.mp4`, que la liste ignore. À l'arrêt,
