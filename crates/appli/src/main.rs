@@ -385,6 +385,13 @@ fn chemin_jeton_portail() -> PathBuf {
     chemin_fiches().with_file_name("fenetre-capture")
 }
 
+#[cfg(not(windows))]
+/// Linux : où le portail garde la fenêtre de VerdierCAM, pour Filmer VerdierCAM seul. Un fichier à lui : Filmer, qui
+/// demande à chaque fois, n'y touche jamais.
+fn chemin_jeton_verdiercam() -> PathBuf {
+    chemin_fiches().with_file_name("portail-verdiercam")
+}
+
 /// Le niveau du micro : vert, orange près de saturer, rouge saturé.
 fn vu_metre(ui: &Ui, db: f32, muet: bool) {
     let (a, b) = (ui.cursor_screen_pos(), [ui.cursor_screen_pos()[0] + 110.0, ui.cursor_screen_pos()[1] + 30.0]);
@@ -815,11 +822,7 @@ impl Monteur {
                         self.verdiercam_lance = Some(std::time::Instant::now());
                     }
                 }
-                if cfg!(windows) {
-                    "VerdierCAM lancé, ses gestes sont notés. L'enregistrement commence dès que sa fenêtre s'ouvre.".into()
-                } else {
-                    "VerdierCAM lancé, ses gestes sont notés. L'enregistrement va demander sa fenêtre.".into()
-                }
+                "VerdierCAM lancé, ses gestes sont notés. L'enregistrement commence dès que sa fenêtre s'ouvre.".into()
             }
             Err(e) => format!("VerdierCAM n'a pas pu être lancé : {e}"),
         };
@@ -883,15 +886,27 @@ impl Monteur {
         self.message = "La webcam ne sera plus filmée.".into();
     }
 
-    /// VerdierCAM déjà ouvert : faux s'il ne l'est pas. Sous Linux, le dialogue de KDE demande sa fenêtre.
+    /// VerdierCAM déjà ouvert : faux s'il ne l'est pas. Sa fenêtre est reprise comme quand le Monteur le lance.
     #[cfg(not(windows))]
     fn filmer_verdiercam_ouvert(&mut self, gestes: &Path) -> bool {
         let Some(note) = noyau::systeme::verdiercam_ouvert(gestes) else { return false };
-        self.filmer_ecran();
+        self.filmer_fenetre_verdiercam();
         if self.capture.is_some() {
-            self.message = format!("VerdierCAM est déjà ouvert : choisis sa fenêtre. {}", gestes_notes(note));
+            self.message = format!("VerdierCAM est déjà ouvert : on filme sa fenêtre. {}", gestes_notes(note));
         }
         true
+    }
+
+    /// LA FENÊTRE DE VERDIERCAM SANS RIEN DEMANDER (25/11/2026). Depuis le 23/11, le dialogue s'ouvrait à chaque prise,
+    /// pour Filmer VerdierCAM aussi : Christophe commençait à parler, « et après, hop, il y a la boîte qui apparaît ». Le
+    /// portail garde ici la fenêtre de VerdierCAM (`portail-verdiercam`) : choisie la toute première fois, reprise
+    /// ensuite. Filmer, lui, demande toujours.
+    #[cfg(not(windows))]
+    fn filmer_fenetre_verdiercam(&mut self) {
+        self.lancer_capture_portail(false, Some(&chemin_jeton_verdiercam()));
+        if self.capture.is_some() {
+            self.message = "On filme VerdierCAM. La toute première fois, choisis sa fenêtre : elle sera reprise ensuite.".into();
+        }
     }
 
     /// Sous Windows, sa fenêtre est filmée sans rien demander, comme quand le Monteur le lance.
@@ -971,13 +986,19 @@ impl Monteur {
 
     #[cfg(not(windows))]
     fn lancer_capture(&mut self, simple: bool) {
+        // Le dialogue du portail s'ouvre à chaque fois (23/11/2026) : reprendre la fenêtre gardée sans rien demander
+        // a fait filmer deux fois la mauvaise à Christophe. Filmer VerdierCAM seul garde la sienne.
+        self.lancer_capture_portail(simple, None);
+    }
+
+    /// `jeton` : où le portail garde la fenêtre à reprendre ; `None`, le dialogue s'ouvre.
+    #[cfg(not(windows))]
+    fn lancer_capture_portail(&mut self, simple: bool, jeton: Option<&Path>) {
         if self.capture.is_some() {
             return;
         }
         let dossier = if simple { self.copies.clone() } else { self.dossier.chemin.clone() };
-        // Le dialogue du portail s'ouvre à chaque fois (23/11/2026) : reprendre la fenêtre gardée sans rien demander
-        // a fait filmer deux fois la mauvaise à Christophe.
-        match capture::Capture::lancer(&dossier, None, !simple) {
+        match capture::Capture::lancer(&dossier, jeton, !simple) {
             Ok(c) => {
                 self.capture = Some(c);
                 self.capture_simple = simple;
@@ -1004,7 +1025,7 @@ impl Monteur {
         if self.capture_prevue.is_some_and(|t| std::time::Instant::now() >= t) {
             self.capture_prevue = None;
             #[cfg(not(windows))]
-            self.filmer_ecran();
+            self.filmer_fenetre_verdiercam();
             #[cfg(windows)]
             self.attendre_verdiercam();
         }

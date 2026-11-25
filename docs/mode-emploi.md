@@ -46,7 +46,8 @@ Deux boutons dans le ruban :
 
 - **Filmer VerdierCAM** (le meilleur) : le Monteur lance VerdierCAM et filme sa fenêtre. VerdierCAM note alors
   chacun de tes gestes (clics, réglages, boîtes ouvertes) : c'est d'eux que naissent les zooms et les étiquettes.
-  S'il est déjà ouvert, il n'est pas relancé et ton travail reste là : sa fenêtre est filmée telle quelle. Ses
+  Sa fenêtre est filmée sans rien demander : sous Linux, le dialogue de KDE ne s'ouvre que la toute première fois,
+  pour la choisir. S'il est déjà ouvert, il n'est pas relancé et ton travail reste là : sa fenêtre est filmée telle quelle. Ses
   gestes ne sont alors notés que si c'est le Monteur qui l'avait lancé ; sinon le message te le dit, et pour les
   avoir il faut le fermer et repasser par ce bouton.
 - **Filmer** : une fenêtre de ton choix, ou **tout l'écran** pour en montrer plusieurs. Le choix s'ouvre à chaque
