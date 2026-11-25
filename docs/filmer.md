@@ -3,11 +3,15 @@
 Sous Linux, ci-dessous. Sous Windows, une autre capture, même résultat : [windows.md](windows.md), « Filmer sous
 Windows ».
 
-Bouton **Filmer…** du ruban : le Monteur lance `gpu-screen-recorder`, qui passe par le portail de
+Bouton **Filmer** du ruban : le Monteur lance `gpu-screen-recorder`, qui passe par le portail de
 KDE, le même dialogue qu'OBS pour choisir la fenêtre, à chaque fois (`-restore-portal-session no`). Jusqu'au
 23/11/2026 le choix était gardé et repris sans rien demander : Christophe a filmé deux fois la mauvaise fenêtre.
+Le dialogue propose aussi l'écran entier (« Partager « DP-1 » ») et une zone : vu le 25/11/2026 dans un KWin
+virtuel, quand Christophe demandait le bureau complet pour filmer plusieurs fenêtres.
 **Filmer VerdierCAM…** lance VerdierCAM puis, 4 s plus tard, l'enregistrement : le dialogue ne liste
-que les fenêtres déjà ouvertes.
+que les fenêtres déjà ouvertes. Un VerdierCAM déjà ouvert (lu dans `/proc`, les captures d'essai `--capture` mises
+à part) n'est pas relancé : le dialogue s'ouvre tout de suite, et le message dit si ses gestes sont notés (sa
+variable `VCAM_JOURNAL_VIDEO` vise le dossier des gestes du Monteur).
 
 **Enregistrement simple** (menu Fichier depuis le 23/11/2026 : dans le ruban, il doublait Filmer) : sans décompte, dans Copies d'écran.
 

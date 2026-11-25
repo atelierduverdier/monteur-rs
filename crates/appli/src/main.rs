@@ -255,6 +255,9 @@ struct Monteur {
     /// Windows : quand VerdierCAM a été lancé pour être filmé ; sa fenêtre est attendue.
     #[cfg(windows)]
     verdiercam_lance: Option<std::time::Instant>,
+    /// Windows : le VerdierCAM lancé par le Monteur, qui note ses gestes (Linux le lit dans `/proc`).
+    #[cfg(windows)]
+    verdiercam_pid: Option<u32>,
     /// La prise tout juste filmée : Préparer se lance dès qu'elle est ouverte.
     a_preparer: Option<PathBuf>,
     /// Le panneau Texte : ce qu'on y cherche, et la phrase que la lecture y a amenée.
@@ -290,6 +293,21 @@ fn dossier_de_depart(fiches: &Fiches) -> PathBuf {
 type Filtre = (&'static str, &'static [&'static str]);
 const FILTRE_VIDEOS: Filtre = ("Vidéos", &["mp4", "mkv", "mov", "MP4", "MKV", "MOV"]);
 const FILTRE_PROJETS: Filtre = ("Projets du Monteur", &["monteur"]);
+/// La fin du message quand on filme un VerdierCAM déjà ouvert.
+fn gestes_notes(note: bool) -> &'static str {
+    if note {
+        "Ses gestes sont notés."
+    } else {
+        "Ouvert sans le Monteur, il ne note pas ses gestes : pour les zooms et les étiquettes, ferme-le puis Filmer VerdierCAM."
+    }
+}
+
+/// Le programme de VerdierCAM sous Windows, `VerdierCAM.exe` : c'est à lui qu'on reconnaît sa fenêtre.
+#[cfg(windows)]
+fn nom_verdiercam() -> String {
+    noyau::systeme::verdiercam().file_name().map_or_else(|| "VerdierCAM.exe".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
 /// Sous Linux, VerdierCAM est une AppImage ou le programme d'une archive, sans extension.
 const FILTRE_VERDIERCAM: Filtre = if cfg!(windows) { ("VerdierCAM", &["exe"]) } else { ("", &[]) };
 
@@ -407,6 +425,8 @@ impl Monteur {
             choix_fenetre: None,
             #[cfg(windows)]
             verdiercam_lance: None,
+            #[cfg(windows)]
+            verdiercam_pid: None,
             a_jeter: None,
             ouvrir_corbeille: false,
             a_preparer: None,
@@ -694,8 +714,14 @@ impl Monteur {
         }
     }
 
-    /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera.
+    /// Lance VerdierCAM pour filmer : ses gestes vont où le Monteur les cherchera. Déjà ouvert, il n'est pas relancé
+    /// (25/11/2026 : Christophe l'a souvent ouvert avec un travail dedans, qui repartait de zéro) : sa fenêtre est
+    /// filmée telle quelle, et le message dit si ses gestes sont notés.
     fn filmer(&mut self) {
+        let gestes = chemin_fiches().with_file_name("gestes");
+        if self.capture.is_none() && self.filmer_verdiercam_ouvert(&gestes) {
+            return;
+        }
         let programme = noyau::systeme::verdiercam();
         if !programme.exists() {
             if std::env::var_os("MONTEUR_VERDIERCAM").is_some() {
@@ -707,7 +733,6 @@ impl Monteur {
             }
             return;
         }
-        let gestes = chemin_fiches().with_file_name("gestes");
         let _ = std::fs::create_dir_all(&gestes);
         let lance = noyau::systeme::commande(&programme)
             .env("VCAM_JOURNAL_VIDEO", &gestes)
@@ -716,7 +741,11 @@ impl Monteur {
             .stderr(std::process::Stdio::null())
             .spawn();
         self.message = match lance {
-            Ok(_) => {
+            Ok(_enfant) => {
+                #[cfg(windows)]
+                {
+                    self.verdiercam_pid = Some(_enfant.id());
+                }
                 if self.capture.is_none() {
                     self.capture_prevue = Some(std::time::Instant::now() + DELAI_VERDIERCAM);
                     #[cfg(windows)]
@@ -733,6 +762,29 @@ impl Monteur {
             }
             Err(e) => format!("VerdierCAM n'a pas pu être lancé : {e}"),
         };
+    }
+
+    /// VerdierCAM déjà ouvert : faux s'il ne l'est pas. Sous Linux, le dialogue de KDE demande sa fenêtre.
+    #[cfg(not(windows))]
+    fn filmer_verdiercam_ouvert(&mut self, gestes: &Path) -> bool {
+        let Some(note) = noyau::systeme::verdiercam_ouvert(gestes) else { return false };
+        self.filmer_ecran();
+        if self.capture.is_some() {
+            self.message = format!("VerdierCAM est déjà ouvert : choisis sa fenêtre. {}", gestes_notes(note));
+        }
+        true
+    }
+
+    /// Sous Windows, sa fenêtre est filmée sans rien demander, comme quand le Monteur le lance.
+    #[cfg(windows)]
+    fn filmer_verdiercam_ouvert(&mut self, _gestes: &Path) -> bool {
+        let Some(f) = capture::fenetre_du_programme(&nom_verdiercam()) else { return false };
+        let note = self.verdiercam_pid.is_some_and(|p| capture::processus(f.hwnd) == Some(p));
+        self.commencer_capture(&f, false);
+        if self.capture.is_some() {
+            self.message = format!("On filme VerdierCAM, déjà ouvert. {}", gestes_notes(note));
+        }
+        true
     }
 
     /// Le texte de la prise : un clic va à la phrase, « Couper » la retire du montage.
@@ -888,8 +940,7 @@ impl Monteur {
     /// Filmer VerdierCAM sous Windows : sa fenêtre est filmée dès qu'elle s'ouvre, sans rien demander.
     #[cfg(windows)]
     fn attendre_verdiercam(&mut self) {
-        let programme = noyau::systeme::verdiercam().file_name().map_or_else(|| "VerdierCAM.exe".to_string(), |n| n.to_string_lossy().into_owned());
-        match capture::fenetre_du_programme(&programme) {
+        match capture::fenetre_du_programme(&nom_verdiercam()) {
             Some(f) => {
                 self.verdiercam_lance = None;
                 self.commencer_capture(&f, false);
@@ -902,10 +953,10 @@ impl Monteur {
         }
     }
 
-    /// La boîte « Quelle fenêtre filmer ? » (Windows) : les fenêtres ouvertes, leur programme.
+    /// La boîte « Que filmer ? » (Windows) : les écrans entiers, puis les fenêtres ouvertes et leur programme.
     #[cfg(windows)]
     fn boite_fenetre(&mut self, ui: &Ui) {
-        const TITRE: &str = "Quelle fenêtre filmer ?";
+        const TITRE: &str = "Que filmer ?";
         let Some(choix) = &mut self.choix_fenetre else { return };
         if !choix.ouverte {
             ui.open_popup(TITRE);
@@ -916,7 +967,7 @@ impl Monteur {
             ui.text_wrapped(if choix.simple {
                 "Enregistrement simple : la vidéo va dans Copies d'écran, sans décompte."
             } else {
-                "La fenêtre filmée la dernière fois est déjà choisie : Entrée pour la reprendre, ou clique sur une autre."
+                "Tout l'écran pour plusieurs fenêtres, ou une seule. Celle filmée la dernière fois est déjà choisie : Entrée pour la reprendre, ou clique sur une autre."
             });
             ui.spacing();
             ui.child_window("fenetres").size([680.0, 320.0]).border(true).build(ui, || {
@@ -1245,12 +1296,12 @@ impl Monteur {
                 vu_metre(ui, db, c.micro_muet());
             }
         } else {
-            if outil(ui, "##filmer", Icone::Filmer, "Filmer une fenêtre", charte::ERREUR, Allure::Simple, "Filme la fenêtre de ton choix, sans les gestes de VerdierCAM. Le choix des fenêtres s'ouvre à chaque fois. La prise arrive dans la liste. Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
+            if outil(ui, "##filmer", Icone::Filmer, "Filmer", charte::ERREUR, Allure::Simple, "Filme une fenêtre, ou tout l'écran pour en montrer plusieurs : le choix s'ouvre à chaque fois. Les gestes de VerdierCAM ne sont notés que s'il a été lancé par Filmer VerdierCAM. La prise arrive dans la liste. Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
                 self.capture_prevue = None;
                 self.filmer_ecran();
             }
             ui.same_line();
-            if outil(ui, "##verdier", Icone::Verdier, "Filmer VerdierCAM", t, Allure::Simple, "Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage.") {
+            if outil(ui, "##verdier", Icone::Verdier, "Filmer VerdierCAM", t, Allure::Simple, "Lance VerdierCAM et l'enregistrement : ses gestes sont notés pour préparer le montage. Déjà ouvert, il n'est pas relancé : sa fenêtre est filmée telle quelle.") {
                 self.filmer();
             }
         }
@@ -1984,7 +2035,7 @@ impl Application for Monteur {
                     self.fenetre_rendre = true;
                 }
                 ui.separator();
-                // Hors du ruban depuis le 23/11/2026 : il y doublait « Filmer une fenêtre » (Christophe : « j'ai
+                // Hors du ruban depuis le 23/11/2026 : il y doublait « Filmer » (alors « Filmer une fenêtre ») (Christophe : « j'ai
                 // l'impression que 2 font double emploi »). Il reste ici, pour une vidéo vite faite d'un bug.
                 if ui.menu_item_enabled_selected_no_shortcut("Enregistrement simple…", false, self.capture.is_none()) {
                     self.capture_prevue = None;

@@ -253,10 +253,13 @@ Comme VerdierCAM le 29/10, sur le PC de l'atelier, dans la session (pas par SSH,
 Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Windows.Graphics.Capture (crate
 `windows-capture`), `enregistreur.rs` fait la prise. Ce que ça donne :
 
-- **La fenêtre** se choisit dans la boîte « Quelle fenêtre filmer ? » (titre et programme). Elle s'ouvre à
+- **La fenêtre** se choisit dans la boîte « Que filmer ? » (titre et programme), sous les écrans entiers (« Tout
+  l'écran », sa taille ; numérotés s'il y en a plusieurs : 25/11/2026, pour montrer plusieurs fenêtres). Elle s'ouvre à
   chaque clic (depuis le 23/11/2026 : reprendre sans rien demander la fenêtre gardée a fait filmer deux fois la
   mauvaise), la dernière filmée déjà choisie (`fenetre-capture`, à côté des fiches) : Entrée pour la reprendre. **Filmer VerdierCAM** lance VerdierCAM et filme sa fenêtre (`VerdierCAM.exe`) dès qu'elle
-  s'ouvre, sans rien demander ; 40 s sans fenêtre, il abandonne.
+  s'ouvre, sans rien demander ; 40 s sans fenêtre, il abandonne. Déjà ouvert (25/11/2026), il n'est pas relancé :
+  sa fenêtre est filmée telle quelle, et ses gestes ne sont notés que si c'est le Monteur qui l'avait lancé (même
+  processus).
 - **L'image** : celle de la fenêtre même quand une autre passe devant, avec le pointeur, sans le cadre jaune
   (Windows 11 ; Windows 10 le dessine). Recadrée sur la zone cliente, sans barre de titre : c'est là que VerdierCAM
   note ses gestes. 30 i/s fixes : la dernière image est reprise tant que la fenêtre ne bouge pas, et le nombre

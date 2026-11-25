@@ -93,6 +93,43 @@ pub fn verdiercam() -> PathBuf {
     choisi.into_iter().chain(a_cote).find(|p| p.is_file()).unwrap_or(defaut)
 }
 
+/// UN VERDIERCAM DÉJÀ OUVERT (25/11/2026). Filmer VerdierCAM le relançait toujours, et Christophe, qui l'a souvent
+/// ouvert avec un travail dedans, repartait de zéro. `Some(vrai)` : un VerdierCAM ouvert note ses gestes dans
+/// `gestes` (lancé par le Monteur, `VCAM_JOURNAL_VIDEO` le dit dans son environnement) ; `Some(faux)` : ouvert sans
+/// journal ; `None` : pas de VerdierCAM. Les captures d'essai (`--capture`, sans fenêtre) ne comptent pas. Lu dans
+/// `/proc`, sous Linux ; sous Windows, c'est la fenêtre de VerdierCAM qui le dit (capture_windows.rs).
+#[cfg(target_os = "linux")]
+pub fn verdiercam_ouvert(gestes: &Path) -> Option<bool> {
+    verdiercam_ouvert_dans(Path::new("/proc"), gestes)
+}
+
+#[cfg(target_os = "linux")]
+fn verdiercam_ouvert_dans(proc: &Path, gestes: &Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut trouve = None;
+    for entree in std::fs::read_dir(proc).ok()?.flatten() {
+        if !entree.file_name().as_bytes().iter().all(u8::is_ascii_digit) {
+            continue;
+        }
+        // Le programme de l'AppImage comme celui d'une construction : `verdiercam` (« (deleted) » s'il a été
+        // reconstruit depuis). Un processus d'un autre utilisateur ne se lit pas : sauté.
+        let Ok(exe) = std::fs::read_link(entree.path().join("exe")) else { continue };
+        let nom = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if nom.trim_end_matches(" (deleted)") != "verdiercam" {
+            continue;
+        }
+        let morceaux = |fichier: &str| std::fs::read(entree.path().join(fichier)).unwrap_or_default();
+        if morceaux("cmdline").split(|o| *o == 0).any(|a| a == b"--capture") {
+            continue;
+        }
+        let note = morceaux("environ")
+            .split(|o| *o == 0)
+            .any(|v| v.strip_prefix(b"VCAM_JOURNAL_VIDEO=").is_some_and(|d| Path::new(OsStr::from_bytes(d)) == gestes));
+        trouve = Some(trouve.unwrap_or(false) || note);
+    }
+    trouve
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +166,29 @@ mod tests {
         // `XDG_DATA_HOME` posé (voir-fenetre.sh) ou non, c'est là que le Monteur 1 écrit.
         let attendu = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| maison().join(".local/share"));
         assert_eq!(donnees(), attendu.join("monteur"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verdiercam_ouvert_lu_dans_proc() {
+        let d = std::env::temp_dir().join(format!("monteur-proc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let gestes = Path::new("/maison/.local/share/monteur/gestes");
+        let processus = |pid: &str, exe: &str, args: &[u8], env: &[u8]| {
+            let p = d.join(pid);
+            std::fs::create_dir_all(&p).unwrap();
+            std::os::unix::fs::symlink(exe, p.join("exe")).unwrap();
+            std::fs::write(p.join("cmdline"), args).unwrap();
+            std::fs::write(p.join("environ"), env).unwrap();
+        };
+        processus("12", "/usr/bin/bash", b"bash\0", b"VCAM_JOURNAL_VIDEO=/maison/.local/share/monteur/gestes\0");
+        processus("13", "/build/src/app/verdiercam", b"verdiercam\0--capture\0x.png\0", b"");
+        std::fs::create_dir_all(d.join("self")).unwrap();
+        assert_eq!(verdiercam_ouvert_dans(&d, gestes), None, "ni un autre programme, ni une capture d'essai");
+        processus("14", "/tmp/.mount_Verdi/usr/bin/verdiercam", b"verdiercam\0", b"HOME=/maison\0");
+        assert_eq!(verdiercam_ouvert_dans(&d, gestes), Some(false), "ouvert à la main : pas de journal");
+        processus("15", "/build/src/app/verdiercam (deleted)", b"verdiercam\0", b"HOME=/maison\0VCAM_JOURNAL_VIDEO=/maison/.local/share/monteur/gestes\0");
+        assert_eq!(verdiercam_ouvert_dans(&d, gestes), Some(true), "lancé par le Monteur : ses gestes sont notés");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

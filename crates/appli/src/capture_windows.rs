@@ -5,6 +5,10 @@
 //!
 //! La fenêtre se choisit dans le Monteur (`ChoixFenetre`), à chaque fois, la dernière filmée déjà choisie
 //! (`fenetre-capture`, à côté des fiches) ; Filmer VerdierCAM prend celle de VerdierCAM dès qu'elle s'ouvre.
+//!
+//! TOUT L'ÉCRAN (25/11/2026, Christophe : « parfois, on veut enregistrer plusieurs fenêtres […] il faudrait le bureau
+//! complet ») : chaque écran est en tête de la liste, avant les fenêtres. Sous KDE, le dialogue du portail le
+//! proposait déjà ; ici, seules les fenêtres l'étaient. Un écran se filme entier, sans recadrage.
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
@@ -22,18 +26,48 @@ use windows_capture::graphics_capture_api::InternalCaptureControl;
 use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
+use windows_capture::monitor::Monitor;
 use windows_capture::window::Window;
 
 use crate::enregistreur::{Demarrer, Dernier, Image, Sons, Source};
 pub use crate::enregistreur::{Enregistrement as Capture, Fin};
 
-/// Une fenêtre qu'on peut filmer.
+/// Une fenêtre qu'on peut filmer, ou un écran entier.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fenetre {
+    /// 0 pour un écran.
     pub hwnd: isize,
     pub titre: String,
-    /// Le programme, `VerdierCAM.exe` par exemple.
+    /// Le programme, `VerdierCAM.exe` par exemple ; la taille pour un écran.
     pub programme: String,
+    /// Un écran entier : son rang pour Windows (à partir de 1).
+    pub ecran: Option<usize>,
+}
+
+/// Le titre d'un écran dans la liste, et dans `fenetre-capture` quand c'est lui qui a été filmé.
+const TOUT_L_ECRAN: &str = "Tout l'écran";
+
+/// Les écrans, « Tout l'écran » s'il n'y en a qu'un, numérotés sinon.
+fn ecrans() -> Vec<Fenetre> {
+    let tous = Monitor::enumerate().unwrap_or_default();
+    let seul = tous.len() == 1;
+    tous.iter()
+        .enumerate()
+        .map(|(i, m)| Fenetre {
+            hwnd: 0,
+            titre: if seul { TOUT_L_ECRAN.to_string() } else { format!("{TOUT_L_ECRAN} {}", i + 1) },
+            programme: match (m.width(), m.height()) {
+                (Ok(l), Ok(h)) => format!("{l} × {h}"),
+                _ => String::new(),
+            },
+            ecran: Some(i + 1),
+        })
+        .collect()
+}
+
+/// Le processus d'une fenêtre : le Monteur reconnaît ainsi le VerdierCAM qu'il a lancé.
+pub fn processus(hwnd: isize) -> Option<u32> {
+    Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void).process_id().ok()
 }
 
 /// Les fenêtres visibles et titrées, le Monteur excepté.
@@ -45,7 +79,7 @@ pub fn fenetres() -> Vec<Fenetre> {
         .filter(|w| w.process_id().is_ok_and(|p| p != moi))
         .filter_map(|w| {
             let titre = w.title().ok().filter(|t| !t.trim().is_empty())?;
-            Some(Fenetre { hwnd: w.as_raw_hwnd() as isize, titre, programme: w.process_name().unwrap_or_default() })
+            Some(Fenetre { hwnd: w.as_raw_hwnd() as isize, titre, programme: w.process_name().unwrap_or_default(), ecran: None })
         })
         .collect()
 }
@@ -61,6 +95,10 @@ pub fn fenetre_gardee(chemin: &Path) -> Option<Fenetre> {
     let texte = std::fs::read_to_string(chemin).ok()?;
     let mut lignes = texte.lines();
     let (programme, titre) = (lignes.next()?.trim().to_string(), lignes.next().unwrap_or("").trim().to_string());
+    if titre.starts_with(TOUT_L_ECRAN) {
+        let ecrans = ecrans();
+        return ecrans.iter().find(|e| e.titre == titre).or(ecrans.first()).cloned();
+    }
     let ouvertes: Vec<Fenetre> = fenetres().into_iter().filter(|f| f.programme.eq_ignore_ascii_case(&programme)).collect();
     ouvertes.iter().find(|f| f.titre == titre).or(ouvertes.first()).cloned()
 }
@@ -75,7 +113,7 @@ pub fn garder(chemin: &Path, f: &Fenetre) {
 /// Filmer `fenetre` : le bureau et le micro, chacun sur sa piste, mêlés à la fin.
 pub fn lancer(dossier: &Path, fenetre: &Fenetre, avec_decompte: bool) -> Result<Capture, String> {
     demander_sans_cadre();
-    Capture::lancer(dossier, demarrer(fenetre.hwnd), Sons { bureau: true, micro: true }, avec_decompte)
+    Capture::lancer(dossier, demarrer(fenetre.hwnd, fenetre.ecran), Sons { bureau: true, micro: true }, avec_decompte)
 }
 
 /// LA CAPTURE SANS CADRE JAUNE (23/11/2026, Christophe : « Ajoute la demande de capture sans cadre jaune »). Un
@@ -148,7 +186,8 @@ impl GraphicsCaptureApiHandler for Prendre {
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _controle: InternalCaptureControl) -> Result<(), Self::Error> {
         let (l, h) = (frame.width(), frame.height());
-        let (x0, y0, x1, y1) = zone(self.hwnd, l, h).unwrap_or((0, 0, l, h));
+        // Un écran (hwnd 0) se filme entier.
+        let (x0, y0, x1, y1) = if self.hwnd == 0 { (0, 0, l, h) } else { zone(self.hwnd, l, h).unwrap_or((0, 0, l, h)) };
         // Une image ratée (fenêtre en train de se réduire…) se saute : la précédente reste.
         let Ok(tampon_image) = frame.buffer_crop(x0, y0, x1, y1) else { return Ok(()) };
         let (largeur, hauteur) = (tampon_image.width(), tampon_image.height());
@@ -183,26 +222,41 @@ impl Drop for EnMarche {
     }
 }
 
-fn demarrer(hwnd: isize) -> Demarrer {
+/// Filmer une fenêtre ou un écran : le même Prendre, seule la chose filmée change.
+fn filmer<T>(chose: impl Fn() -> T, dernier: &Dernier, hwnd: isize) -> Result<CaptureControl<Prendre, String>, String>
+where
+    T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Send + 'static,
+    <T as TryInto<windows_capture::settings::GraphicsCaptureItemType>>::Error: Send + Sync + std::fmt::Debug + 'static,
+{
+    let reglages = |bord| {
+        Settings::new(
+            chose(),
+            CursorCaptureSettings::WithCursor,
+            bord,
+            SecondaryWindowSettings::Default,
+            // 30 images par seconde suffisent : au-delà, des copies pour rien.
+            MinimumUpdateIntervalSettings::Custom(Duration::from_millis(30)),
+            DirtyRegionSettings::Default,
+            ColorFormat::Bgra8,
+            (dernier.clone(), hwnd),
+        )
+    };
+    // Sans le cadre jaune si Windows le permet (Windows 11, et l'accord donné pour le paquet du Store), avec sinon.
+    attendre_sans_cadre();
+    Prendre::start_free_threaded(reglages(DrawBorderSettings::WithoutBorder))
+        .or_else(|_| Prendre::start_free_threaded(reglages(DrawBorderSettings::Default)))
+        .map_err(|e| format!("la capture de Windows refuse cette fenêtre ({e:?})"))
+}
+
+fn demarrer(hwnd: isize, ecran: Option<usize>) -> Demarrer {
     Box::new(move |dernier: Dernier| {
-        let reglages = |bord| {
-            Settings::new(
-                Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void),
-                CursorCaptureSettings::WithCursor,
-                bord,
-                SecondaryWindowSettings::Default,
-                // 30 images par seconde suffisent : au-delà, des copies pour rien.
-                MinimumUpdateIntervalSettings::Custom(Duration::from_millis(30)),
-                DirtyRegionSettings::Default,
-                ColorFormat::Bgra8,
-                (dernier.clone(), hwnd),
-            )
+        let controle = match ecran {
+            Some(rang) => {
+                let m = Monitor::from_index(rang).or_else(|_| Monitor::primary()).map_err(|e| format!("pas d'écran à filmer ({e:?})"))?;
+                filmer(|| m, &dernier, 0)?
+            }
+            None => filmer(|| Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void), &dernier, hwnd)?,
         };
-        // Sans le cadre jaune si Windows le permet (Windows 11, et l'accord donné pour le paquet du Store), avec sinon.
-        attendre_sans_cadre();
-        let controle = Prendre::start_free_threaded(reglages(DrawBorderSettings::WithoutBorder))
-            .or_else(|_| Prendre::start_free_threaded(reglages(DrawBorderSettings::Default)))
-            .map_err(|e| format!("la capture de Windows refuse cette fenêtre ({e:?})"))?;
         Ok(Box::new(EnMarche(Some(controle))) as Box<dyn Source>)
     })
 }
@@ -219,15 +273,15 @@ pub struct ChoixFenetre {
 
 impl ChoixFenetre {
     pub fn nouveau(simple: bool, gardee: Option<&Path>) -> Self {
-        let fenetres = fenetres();
-        let choisie = gardee.and_then(fenetre_gardee).and_then(|g| fenetres.iter().position(|f| f.hwnd == g.hwnd));
+        let fenetres = ecrans().into_iter().chain(fenetres()).collect::<Vec<_>>();
+        let choisie = gardee.and_then(fenetre_gardee).and_then(|g| fenetres.iter().position(|f| f.hwnd == g.hwnd && f.ecran == g.ecran));
         Self { fenetres, simple, choisie, ouverte: false }
     }
 
     pub fn rafraichir(&mut self) {
-        let avant = self.choisie.and_then(|i| self.fenetres.get(i).map(|f| f.hwnd));
-        self.fenetres = fenetres();
-        self.choisie = avant.and_then(|h| self.fenetres.iter().position(|f| f.hwnd == h));
+        let avant = self.choisie.and_then(|i| self.fenetres.get(i).map(|f| (f.hwnd, f.ecran)));
+        self.fenetres = ecrans().into_iter().chain(fenetres()).collect();
+        self.choisie = avant.and_then(|h| self.fenetres.iter().position(|f| (f.hwnd, f.ecran) == h));
     }
 }
 
