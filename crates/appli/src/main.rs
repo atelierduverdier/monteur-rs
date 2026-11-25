@@ -20,6 +20,7 @@ mod etat;
 mod ligne;
 mod midi;
 mod miniatures;
+mod notification;
 mod outils;
 mod presse_papiers;
 mod raccourci;
@@ -833,17 +834,22 @@ impl Monteur {
 
     /// La webcam en grand pendant qu'on filme, ou de retour en vignette : l'instant se note, et le montage de la prise
     /// en reçoit les passages (25/11/2026, la bascule proposée avec la webcam : « Oui, ajoute-la »).
+    /// La fenêtre du Monteur est alors souvent cachée : une notification muette dit que l'appui est pris.
     fn basculer_webcam_en_direct(&mut self) {
         if self.webcam.is_none() {
+            // La touche arrive bien, mais il n'y a rien à basculer : le dire, sinon elle semble ne pas marcher.
+            notification::montrer(&format!("{TOUCHE_WEBCAM} reçue"), "La webcam n'est pas filmée en ce moment : coche Fichier › Filmer aussi la webcam, puis filme.");
             return;
         }
         let maintenant = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
         self.webcam_bascules.push(maintenant);
-        self.message = if self.webcam_en_grand() {
-            format!("Webcam en grand : {} la ramène en vignette.", TOUCHE_WEBCAM)
+        if self.webcam_en_grand() {
+            self.message = format!("Webcam en grand : {TOUCHE_WEBCAM} la ramène en vignette.");
+            notification::montrer("Webcam en grand", &format!("{TOUCHE_WEBCAM} la ramène en vignette."));
         } else {
-            "Webcam revenue en vignette.".into()
-        };
+            self.message = "Webcam revenue en vignette.".into();
+            notification::montrer("Webcam en vignette", "Le passage en grand est noté pour le montage.");
+        }
     }
 
     /// Pendant la prise : la webcam est-elle en grand ?
@@ -999,6 +1005,7 @@ impl Monteur {
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
         let webcam = self.webcam.take().map(webcam::Webcam::finir);
+        notification::retirer();
         let bascules = std::mem::take(&mut self.webcam_bascules);
         let note_webcam = match (&fin, webcam) {
             (capture::Fin::Prise(p, debut), Some(w)) if !self.capture_simple => {

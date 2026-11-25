@@ -81,7 +81,9 @@ montage, calée toute seule :
 - **En grand dès le tournage** : pendant la prise, **Meta+F11** (Windows+F11 sous Windows), le bouton S de la voie 5
   du nanoKONTROL2 ou un clic sur « ● webcam » la passent en grand, puis la ramènent. « ● webcam en grand » s'allume
   en orange, et la prise arrive avec ces passages déjà posés, à retoucher comme les autres. KDE fait confirmer
-  Meta+F11 la première fois, comme Meta+F12.
+  Meta+F11 la première fois, comme Meta+F12. Une notification sans son (« Webcam en grand », « Webcam en vignette »)
+  confirme chaque appui, puisque le Monteur est souvent caché pendant qu'on filme ; elle ne se voit pas dans une
+  prise d'une seule fenêtre. Meta+F11 pressée hors d'une prise avec webcam le dit aussi.
 
 Ce que tu vois est ce qui sort : le rendu incruste la webcam comme la visionneuse.
 

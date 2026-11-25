@@ -88,6 +88,16 @@ en secondes de la prise (en grand, vignette, en grand… ; restée en grand : ju
 0). Vu dans un KWin virtuel par deux appuis simulés sur la voie 5, à 3 s l'un de l'autre : passage de 2,733 à
 5,735 s dans le montage. La touche elle-même n'a pas été pressée ici.
 
+**La notification muette** (`notification.rs`, Christophe : « notification muette », plutôt qu'un bip qui se
+serait enregistré avec le son de l'ordinateur) : `org.freedesktop.Notifications` avec `suppress-sound`, la bulle
+d'avant remplacée ; sous Windows, la bulle d'une icône de la zone de notification (`NIIF_NOSOUND`), retirée à la fin
+de la prise. Acceptée par le bureau de KDE le 25/11 (essai par gdbus, mêmes paramètres).
+
+**Meta+F11 chez Christophe, le 25/11** : KDE a bien la touche pour le Monteur (kglobalaccel, composant actif), et
+le raccourci déclenché par D-Bus arrive au Monteur ; mais la touche pressée n'a pas fait réagir KDE (aucun
+`globalShortcutPressed` à l'écoute), elle est allée à la fenêtre de Claude, qui s'est mise en plein écran (F11 de
+Chromium). Cause encore inconnue.
+
 ## Effacer une prise
 
 Clic droit dans la liste, ou Fichier › Mettre la prise à la corbeille : une confirmation donne tous
