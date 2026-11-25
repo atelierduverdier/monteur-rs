@@ -81,6 +81,13 @@ virtuel, avec un faux gpu-screen-recorder (une mire) et la vraie C920 : prise de
 2,6 s ; et sur une mire à compteur, la vignette, sa montée et le plein cadre tombent à la même seconde dans
 l'aperçu et dans le rendu.
 
+**En grand dès le tournage** (25/11/2026, l'option de la proposition : « Oui, ajoute-la ») : Meta+F11 (portail
+GlobalShortcuts, à côté de Meta+F12 ; Windows+F11 par `RegisterHotKey`), la voie 5 S du nanoKONTROL2 ou un clic
+sur le témoin notent l'heure de chaque bascule ; à l'arrêt, `Webcam::passages_des_bascules` en fait des passages
+en secondes de la prise (en grand, vignette, en grand… ; restée en grand : jusqu'à la fin ; pendant le décompte :
+0). Vu dans un KWin virtuel par deux appuis simulés sur la voie 5, à 3 s l'un de l'autre : passage de 2,733 à
+5,735 s dans le montage. La touche elle-même n'a pas été pressée ici.
+
 ## Effacer une prise
 
 Clic droit dans la liste, ou Fichier › Mettre la prise à la corbeille : une confirmation donne tous

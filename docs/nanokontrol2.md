@@ -43,6 +43,7 @@ octet de la scène, écrit par SysEx) : pas fait.
 | Voie 2 : S / M / R | Annuler / rétablir / Échap |
 | Voie 3 : S / M / R | Préparer le montage / Nettoyer la voix… / Rendre… |
 | Voie 4 : S / M / R | Enregistrer le projet / aller au début / aller à la fin |
+| Voie 5 : S | La webcam en grand, puis de retour en vignette : en filmant, l'instant se note pour le montage ; au montage, à la tête de lecture (W) |
 | Faders 2 / 3 / 4 / 5 | Voix : réduction du bruit / coupe du grave / rapport d'égalisation / adoucir les « s » |
 | Bouton rotatif 4 | Voix : seuil d'égalisation |
 | Bouton rotatif 8 | Navette : au centre rien ; tourné, la tête file en arrière ou en avant, de 0,5 à 16 s par seconde |

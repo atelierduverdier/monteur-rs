@@ -64,6 +64,7 @@ pub enum Action {
     Voix,
     Rendre,
     Enregistrer,
+    Webcam,
     Grossissement,
     CentreX,
     CentreY,
@@ -102,6 +103,7 @@ pub const NOMS: &[(&str, Action)] = &[
     ("voix", Voix),
     ("rendre", Rendre),
     ("enregistrer", Enregistrer),
+    ("webcam", Webcam),
     ("grossissement", Grossissement),
     ("centre_x", CentreX),
     ("centre_y", CentreY),
@@ -144,6 +146,8 @@ const USINE: &[(u8, Action)] = &[
     (35, Enregistrer),
     (51, Debut),
     (67, Fin),
+    // Voie 5, S : la webcam en grand, puis de retour (en filmant comme au montage, la touche W).
+    (36, Webcam),
     // Faders 2 à 5 et bouton 4 : la fenêtre Nettoyer la voix, quand elle est ouverte.
     (1, Bruit),
     (2, Grave),
@@ -585,6 +589,7 @@ impl crate::Monteur {
                 return;
             }
             Enregistrer => return self.enregistrer(),
+            Webcam if self.webcam.is_some() => return self.basculer_webcam_en_direct(),
             Lire | Stop => self.midi.arreter_la_navette(),
             _ => {}
         }
@@ -609,6 +614,7 @@ impl crate::Monteur {
             Debut => p.lecteur.aller_a(0.0),
             Fin => p.lecteur.aller_a(p.montage.duree),
             Coupe => self.message = p.marquer_coupe(t),
+            Webcam => self.message = p.basculer_webcam(t),
             Chapitre => {
                 p.poser_chapitre(t);
                 self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();

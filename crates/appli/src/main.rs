@@ -219,6 +219,8 @@ struct Monteur {
     cameras: Option<Vec<webcam::Camera>>,
     /// La caméra filmée avec chaque prise ; `None` : pas de webcam (`monteur/webcam`).
     camera_choisie: Option<String>,
+    /// Les bascules de la webcam pendant la prise (Meta+F11, le nanoKONTROL2), à l'heure murale.
+    webcam_bascules: Vec<f64>,
     miniatures: miniatures::Miniatures,
     fiches: Fiches,
     /// Une fiche changée, pas encore écrite.
@@ -311,7 +313,7 @@ const FILTRE_VIDEOS: Filtre = ("Vidéos", &["mp4", "mkv", "mov", "MP4", "MKV", "
 const FILTRE_PROJETS: Filtre = ("Projets du Monteur", &["monteur"]);
 /// La webcam filmée avec la prise `video` (instant 0 à l'heure `debut`) prend son nom, et le montage de la prise
 /// l'incruste, calée. Rend ce que le message de fin en dit.
-fn ranger_webcam(video: &Path, debut: f64, webcam: Result<(PathBuf, f64), String>) -> String {
+fn ranger_webcam(video: &Path, debut: f64, webcam: Result<(PathBuf, f64), String>, en_grand: &[noyau::montage::EnGrand]) -> String {
     let (partiel, debut_webcam) = match webcam {
         Ok(w) => w,
         Err(e) => return format!(" {e}"),
@@ -323,7 +325,9 @@ fn ranger_webcam(video: &Path, debut: f64, webcam: Result<(PathBuf, f64), String
     let chemin = etat::chemin_montage(video);
     let mut montage = noyau::montage::Montage::lire(&chemin).unwrap_or_default();
     let nom = cible.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    montage.webcam = Some(noyau::montage::Webcam::nouvelle(nom, noyau::arrondi::arrondi(debut - debut_webcam, 3)));
+    let mut w = noyau::montage::Webcam::nouvelle(nom, noyau::arrondi::arrondi(debut - debut_webcam, 3));
+    w.en_grand = en_grand.to_vec();
+    montage.webcam = Some(w);
     match montage.ecrire(&chemin) {
         Ok(()) => " Webcam filmée aussi.".into(),
         Err(e) => format!(" Webcam filmée, mais le montage ne s'écrit pas : {e}"),
@@ -364,6 +368,9 @@ const DELAI_VERDIERCAM: std::time::Duration = std::time::Duration::from_secs(4);
 fn chemin_voix() -> PathBuf {
     chemin_fiches().with_file_name("voix.json")
 }
+
+/// La touche qui passe la webcam en grand pendant qu'on filme (raccourci.rs).
+const TOUCHE_WEBCAM: &str = if cfg!(windows) { "Windows+F11" } else { "Meta+F11" };
 
 /// La caméra filmée avec chaque prise (ce que ffmpeg ouvre) ; pas de fichier : pas de webcam.
 fn chemin_webcam() -> PathBuf {
@@ -436,6 +443,7 @@ impl Monteur {
             webcam_saisie: None,
             webcam: None,
             cameras: None,
+            webcam_bascules: Vec::new(),
             camera_choisie: std::fs::read_to_string(chemin_webcam()).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             miniatures,
             fiches,
@@ -817,9 +825,30 @@ impl Monteur {
 
     /// La webcam choisie se met à filmer avec la prise, dans le même dossier.
     fn lancer_webcam(&mut self, dossier: &Path) {
+        self.webcam_bascules.clear();
         let Some(entree) = self.camera_choisie.clone() else { return };
         let camera = self.cameras().iter().find(|c| c.entree == entree).cloned().unwrap_or(webcam::Camera { nom: entree.clone(), entree });
         self.webcam = Some(webcam::Webcam::lancer(&camera, dossier));
+    }
+
+    /// La webcam en grand pendant qu'on filme, ou de retour en vignette : l'instant se note, et le montage de la prise
+    /// en reçoit les passages (25/11/2026, la bascule proposée avec la webcam : « Oui, ajoute-la »).
+    fn basculer_webcam_en_direct(&mut self) {
+        if self.webcam.is_none() {
+            return;
+        }
+        let maintenant = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        self.webcam_bascules.push(maintenant);
+        self.message = if self.webcam_en_grand() {
+            format!("Webcam en grand : {} la ramène en vignette.", TOUCHE_WEBCAM)
+        } else {
+            "Webcam revenue en vignette.".into()
+        };
+    }
+
+    /// Pendant la prise : la webcam est-elle en grand ?
+    fn webcam_en_grand(&self) -> bool {
+        self.webcam_bascules.len() % 2 == 1
     }
 
     /// Fichier › Filmer aussi la webcam : la caméra choisie (la première trouvée par défaut), ou plus de webcam.
@@ -955,6 +984,7 @@ impl Monteur {
             match e {
                 raccourci::Evenement::Pret => eprintln!("raccourci global prêt"),
                 raccourci::Evenement::Appui => self.capture.iter_mut().for_each(capture::Capture::arreter),
+                raccourci::Evenement::Webcam => self.basculer_webcam_en_direct(),
                 // Le bouton Arrêter reste là : un simple mot, sans gêner.
                 raccourci::Evenement::Echec(e) => eprintln!("raccourci global indisponible : {e}"),
             }
@@ -969,8 +999,12 @@ impl Monteur {
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
         let webcam = self.webcam.take().map(webcam::Webcam::finir);
+        let bascules = std::mem::take(&mut self.webcam_bascules);
         let note_webcam = match (&fin, webcam) {
-            (capture::Fin::Prise(p, debut), Some(w)) if !self.capture_simple => ranger_webcam(p, *debut, w),
+            (capture::Fin::Prise(p, debut), Some(w)) if !self.capture_simple => {
+                let en_grand: Vec<f64> = bascules.iter().map(|b| b - debut).collect();
+                ranger_webcam(p, *debut, w, &noyau::montage::Webcam::passages_des_bascules(&en_grand, duree))
+            }
             (_, Some(Ok((partiel, _)))) => {
                 let _ = std::fs::remove_file(partiel);
                 String::new()
@@ -1391,16 +1425,25 @@ impl Monteur {
                 ui.same_line();
                 vu_metre(ui, db, c.micro_muet());
             }
-            // La webcam filmée avec la prise : verte dès sa première image.
+            // La webcam filmée avec la prise : verte dès sa première image, orange en grand. Un clic, Meta+F11 ou la
+            // voie 5 du nanoKONTROL2 la passent en grand ou la ramènent.
             if let Some(w) = &self.webcam {
                 ui.same_line();
                 // À la hauteur de la barre du vu-mètre (30 px, la barre au milieu).
                 let p = ui.cursor_pos();
                 ui.set_cursor_pos([p[0], p[1] + 7.0]);
-                let (couleur, texte) = if w.tourne() { (charte::SUCCES_TEXTE, "● webcam") } else { (charte::TEXT_2, "○ webcam…") };
+                let (couleur, texte) = match (w.tourne(), self.webcam_en_grand()) {
+                    (_, true) => (charte::ACCENT, "● webcam en grand"),
+                    (true, false) => (charte::SUCCES_TEXTE, "● webcam"),
+                    (false, false) => (charte::TEXT_2, "○ webcam…"),
+                };
                 ui.text_colored(charte::c(couleur), texte);
+                let clic = ui.is_item_clicked();
                 if ui.is_item_hovered() {
-                    ui.tooltip_text(format!("{} : filmée à part, incrustée au montage.", w.camera.nom));
+                    ui.tooltip_text(format!("{} : filmée à part, incrustée au montage. Un clic ou {} la passe en grand, puis la ramène.", w.camera.nom, TOUCHE_WEBCAM));
+                }
+                if clic {
+                    self.basculer_webcam_en_direct();
                 }
             }
         } else {

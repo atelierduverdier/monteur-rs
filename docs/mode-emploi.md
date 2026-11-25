@@ -78,6 +78,10 @@ montage, calée toute seule :
   toute l'image pour 5 s ; **W** encore la ramène en vignette. Les passages se voient dans la piste **Webcam** de la
   ligne de temps : ils s'y glissent, s'allongent, et un glisser dans la piste en crée un. Tes sous-titres restent
   par-dessus.
+- **En grand dès le tournage** : pendant la prise, **Meta+F11** (Windows+F11 sous Windows), le bouton S de la voie 5
+  du nanoKONTROL2 ou un clic sur « ● webcam » la passent en grand, puis la ramènent. « ● webcam en grand » s'allume
+  en orange, et la prise arrive avec ces passages déjà posés, à retoucher comme les autres. KDE fait confirmer
+  Meta+F11 la première fois, comme Meta+F12.
 
 Ce que tu vois est ce qui sort : le rendu incruste la webcam comme la visionneuse.
 

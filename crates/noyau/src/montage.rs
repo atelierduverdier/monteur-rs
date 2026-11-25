@@ -299,6 +299,19 @@ impl Webcam {
         true
     }
 
+    /// Les passages en grand d'après les bascules faites pendant le tournage (Meta+F11, le nanoKONTROL2), en secondes
+    /// de la prise : la première fait passer en grand, la suivante ramène, et ainsi de suite ; restée en grand, elle
+    /// l'est jusqu'à la fin. Une bascule d'avant la première image (pendant le décompte) compte pour 0.
+    pub fn passages_des_bascules(bascules: &[f64], duree: f64) -> Vec<EnGrand> {
+        let instants: Vec<f64> = bascules.iter().map(|t| crate::arrondi::arrondi(t.clamp(0.0, duree), 3)).collect();
+        instants
+            .chunks(2)
+            .map(|paire| (paire[0], paire.get(1).copied().unwrap_or(crate::arrondi::arrondi(duree, 3))))
+            .filter(|(a, b)| b - a >= 2.0 * RAMPE)
+            .map(|(debut, fin)| EnGrand { debut, fin, autres: Autres::new() })
+            .collect()
+    }
+
     /// Où la webcam se pose dans une image `l × h`, et la part de l'image de la caméra (`cl × ch`) qu'on y montre :
     /// `((x, y, l, h), (sx, sy, sl, sh))` en pixels. En vignette, toute l'image de la caméra, gardée dans l'image ;
     /// en grand, toute l'image, la caméra rognée à ses proportions ; entre les deux, l'un glisse vers l'autre.
@@ -805,6 +818,14 @@ mod tests_webcam {
         assert_eq!(v.en_grand.len(), 1, "à peine commencé : effacé");
         assert!(v.basculer(1.0, 60.0));
         assert_eq!(v.en_grand[0].fin, 3.0, "jusqu'au passage suivant");
+        // Pendant le tournage : en grand à 4 s, revenue à 9 s ; de nouveau à 20 s jusqu'à la fin ; une bascule pendant le
+        // décompte compte pour 0 ; un aller-retour trop court ne fait rien.
+        let p = Webcam::passages_des_bascules(&[4.0, 9.0, 12.0, 12.3, 20.0], 30.0);
+        let p: Vec<(f64, f64)> = p.iter().map(|e| (e.debut, e.fin)).collect();
+        assert_eq!(p, [(4.0, 9.0), (20.0, 30.0)]);
+        let p = Webcam::passages_des_bascules(&[-1.5, 3.0], 30.0);
+        assert_eq!((p[0].debut, p[0].fin), (0.0, 3.0));
+        assert!(Webcam::passages_des_bascules(&[], 30.0).is_empty());
         // Posée trop à droite ou trop grande, elle reste dans l'image.
         w.x = 0.99;
         w.largeur = 0.9;
