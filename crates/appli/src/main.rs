@@ -1981,6 +1981,10 @@ impl Monteur {
             _ => {
                 titre(ui, "Réglages du montage");
                 let r = &mut p.montage.reglages;
+                change |= ui.checkbox("Montrer les zooms", &mut r.montrer_zooms);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("Décochée : l'image reste entière, dans la visionneuse et au rendu. Les zooms restent sur leur piste : recocher les ramène.");
+                }
                 change |= ui.checkbox("Montrer les clics", &mut r.montrer_clics);
                 change |= ui.checkbox("Montrer les étiquettes", &mut r.montrer_etiquettes);
                 change |= ui.checkbox("Mettre le réglage en lumière", &mut r.mettre_en_lumiere);

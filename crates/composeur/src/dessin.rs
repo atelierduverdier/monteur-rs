@@ -155,7 +155,9 @@ impl Cadre {
 
 impl<'a> Compositeur<'a> {
     pub fn new(montage: &'a Montage, polices: &'a Polices) -> Self {
-        Self { montage, polices, cles: montage::cles_zoom(&montage.zooms) }
+        // Zooms décochés : aucune clé, l'image reste entière dans l'aperçu comme au rendu.
+        let cles = if montage.reglages.montrer_zooms { montage::cles_zoom(&montage.zooms) } else { Vec::new() };
+        Self { montage, polices, cles }
     }
 
     /// La part de l'image source montrée à l'instant t (x, y, l, h en pixels).
@@ -563,4 +565,22 @@ pub fn image_vide(l: u32, h: u32) -> Pixmap {
     let mut p = Pixmap::new(l.max(1), h.max(1)).expect("taille non nulle");
     p.fill(Color::BLACK);
     p
+}
+
+#[cfg(test)]
+mod tests_zooms {
+    use super::*;
+
+    /// « Montrer les zooms » décochée : l'image reste entière au milieu du zoom, qui reste dans le montage.
+    #[test]
+    fn zooms_decoches_image_entiere() {
+        let mut m = Montage { duree: 10.0, largeur: 1920, hauteur: 1080, ..Montage::default() };
+        m.zooms.push(noyau::montage::Zoom { debut: 2.0, fin: 8.0, facteur: 2.0, cx: 0.25, cy: 0.25, origine: "main".into(), libelle: String::new(), autres: Default::default() });
+        let polices = Polices::charger();
+        let (_, _, l, _) = Compositeur::new(&m, &polices).vue(5.0, 1920.0, 1080.0);
+        assert!(l < 1000.0, "cochée, le zoom resserre : {l}");
+        m.reglages.montrer_zooms = false;
+        assert_eq!(Compositeur::new(&m, &polices).vue(5.0, 1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(m.zooms.len(), 1);
+    }
 }

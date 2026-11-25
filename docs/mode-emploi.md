@@ -115,7 +115,7 @@ Tout est à relire : rien n'est figé, chaque élément se change dans la ligne 
   règle place la tête ; un élément se glisse, s'allonge par un bord ; double-clic dans une piste vide : un élément de
   2 s. Molette : défiler ; Ctrl+molette : resserrer.
 - **L'inspecteur** règle l'élément choisi (début, fin, grossissement, texte…), sinon le montage entier : montrer les
-  clics, les étiquettes, les sous-titres (incrustés dans l'image, ou à part en .srt), le fondu aux coupes, le carton
+  zooms (décochée, l'image reste entière ; les zooms restent sur leur piste, prêts à revenir), les clics, les étiquettes, les sous-titres (incrustés dans l'image, ou à part en .srt), le fondu aux coupes, le carton
   « Fait avec VerdierCAM » à la fin.
 - **Le panneau Texte** montre tout ce que tu dis : un clic va à la phrase, « Couper » la retire du montage.
 - **Les vidéos insérées** (Intercaler, Par-dessus) : une autre vidéo qui coupe la prise, ou qui passe par-dessus

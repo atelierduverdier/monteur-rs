@@ -351,6 +351,10 @@ pub struct Reglages {
     /// Monteur 1 ne le connaît pas.
     #[serde(skip_serializing_if = "est_vrai")]
     pub carton_fin: bool,
+    /// Décochée, l'image reste entière : les zooms restent sur leur piste, prêts à revenir (25/11/2026,
+    /// Christophe : « si je veux désactiver les zooms, je fais comment ? »). Écrit seulement décoché.
+    #[serde(skip_serializing_if = "est_vrai")]
+    pub montrer_zooms: bool,
     #[serde(flatten)]
     pub autres: Autres,
 }
@@ -378,6 +382,7 @@ impl Default for Reglages {
             calage_auto: true,
             fondu: FONDU_DEFAUT,
             carton_fin: true,
+            montrer_zooms: true,
             autres: Autres::new(),
         }
     }
