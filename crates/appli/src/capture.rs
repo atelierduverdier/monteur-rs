@@ -44,7 +44,8 @@ pub struct Capture {
 }
 
 pub enum Fin {
-    Prise(PathBuf),
+    /// La prise, et l'heure murale de son instant 0 (la webcam s'y cale).
+    Prise(PathBuf, f64),
     Annulee,
     Erreur(String),
 }
@@ -258,7 +259,7 @@ fn conclure(partiel: &Path, dossier: &Path, stoppee: bool, reussi: bool, decale:
     match son {
         Ok(()) => {
             let _ = std::fs::remove_file(partiel);
-            Fin::Prise(cible)
+            Fin::Prise(cible, instant)
         }
         // La prise n'est pas perdue : ses deux pistes y sont, le rendu n'en lira que la première.
         Err(e) => Fin::Erreur(format!("Prise enregistrée mais son non mêlé ({e}) : {}", cible.display())),

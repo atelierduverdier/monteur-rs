@@ -74,6 +74,8 @@ pub fn lister_videos(dossier: &Path) -> Vec<PathBuf> {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_file() && EXTENSIONS.contains(&extension(p).as_str()) && !stem(p).ends_with(".partiel"))
+        // La webcam filmée avec une prise n'en est pas une.
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(crate::SUFFIXE_WEBCAM)))
         .collect();
     let mut sources: Vec<&PathBuf> = videos.iter().filter(|p| !est_derivee(p)).collect();
     // Deux sources de même nom (X.mkv d'OBS et X.mp4 remuxé) partageraient vignette, description

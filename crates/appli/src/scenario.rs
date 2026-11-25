@@ -7,6 +7,7 @@
 //! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `filmer_simple`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `dire_voix` (les réglages
 //! de la voix), `midi <cc> <valeur>` (un message du nanoKONTROL2 : 127 appuie un bouton, 0 le relâche),
+//! `webcam_grand` (touche W à la tête de lecture), `webcam_place <x> <y> <largeur>`, `choisir_webcam <rang>`,
 //! `planter` (essai du journal des plantages), `quitter`.
 
 use std::collections::VecDeque;
@@ -204,6 +205,19 @@ impl Scenario {
                 "stop" => m.prise.iter_mut().for_each(|p| p.lecteur.stop()),
                 "couper" => m.prise.iter_mut().for_each(|p| p.ajouter_coupe(nombre(1), nombre(2))),
                 "defaire" => m.prise.iter_mut().for_each(|p| p.defaire()),
+                "webcam_grand" => m.prise.iter_mut().for_each(|p| {
+                    let t = p.lecteur.position();
+                    println!("  {}", p.basculer_webcam(t));
+                }),
+                "webcam_place" => m.prise.iter_mut().for_each(|p| {
+                    if let Some(w) = &mut p.montage.webcam {
+                        (w.x, w.y, w.largeur) = (nombre(1), nombre(2), nombre(3));
+                        p.modifie();
+                    }
+                }),
+                "choisir_webcam" => m.prise.iter_mut().for_each(|p| {
+                    p.choix = Some(crate::etat::Choix { sorte: crate::etat::Sorte::Webcam, indice: nombre(1) as usize });
+                }),
                 "capture" => {
                     if let Some(f) = mots.get(1) {
                         m.vue.enregistrer(f);

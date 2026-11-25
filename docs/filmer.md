@@ -59,6 +59,28 @@ au premier enregistrement. Le portail refuse une appli sans identité : `outils/
 `.desktop` `fr.atelierduverdier.Monteur2`, qui donne aussi le lanceur du menu. Identité acceptée le
 05/11 ; l'appui lui-même reste à essayer.
 
+## La webcam (25/11/2026)
+
+Christophe : « l'incrustation d'une webcam […] que l'on peut déplacer la petite fenêtre, agrandir », et la passer en
+grand « pour effacer son travail, histoire de dire quelque chose aux gens ». Fichier › Filmer aussi la webcam
+(gardé dans `monteur/webcam`) : `webcam.rs` lance un second ffmpeg en même temps que gpu-screen-recorder, sur la
+caméra V4L2 (`/dev/videoN` d'index 0), en MJPEG 1280 × 720 à 30 i/s si elle le sait (la C920 de l'atelier, oui),
+encodée comme l'enregistreur de Windows (x264 « veryfast » ici), dans un Matroska à part.
+
+**Le calage** : `-use_wallclock_as_timestamps` donne à chaque image l'heure de son arrivée, et ffmpeg annonce au
+départ celle de la première (« start: … ») ; la vidéo écrite, elle, commence à 0. La prise sait l'heure de son
+instant 0 (son `.ts`, plus le décompte) : la différence est le `decalage` du montage. Mesuré : la C920 donne sa
+première image 0,37 s après le lancement. `-copyts` aurait gardé l'heure dans le fichier, mais le Matroska en sort
+cassé (essayé le 25/11).
+
+À l'arrêt, `q` sur l'entrée de ffmpeg ; la vidéo prend le nom `<prise> webcam.mkv` (la liste l'ignore, la corbeille
+l'emporte avec sa prise), et le montage reçoit `webcam` : fichier, décalage, place et taille de la vignette, passages
+en grand. Le composeur la peint sur l'écran et ses étiquettes, sous les sous-titres ; le rendu lit une image de la
+webcam par image de la prise, gardée ou non, pour rester calé à travers les coupes. Vu le 25/11 dans un KWin
+virtuel, avec un faux gpu-screen-recorder (une mire) et la vraie C920 : prise de 12,5 s, webcam de 12,0 s, décalage
+2,6 s ; et sur une mire à compteur, la vignette, sa montée et le plein cadre tombent à la même seconde dans
+l'aperçu et dans le rendu.
+
 ## Effacer une prise
 
 Clic droit dans la liste, ou Fichier › Mettre la prise à la corbeille : une confirmation donne tous

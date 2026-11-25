@@ -4,7 +4,7 @@
 //! un de 2 s. Molette : défiler ; Ctrl+molette : resserrer autour de la souris.
 
 use dear_imgui_rs::{MouseButton, MouseCursor, Ui};
-use noyau::montage::{Clic, Coupe, Etiquette, Montage, SousTitre, Zoom};
+use noyau::montage::{Clic, Coupe, EnGrand, Etiquette, Montage, SousTitre, Zoom};
 
 use crate::etat::{Choix, PICS_PAR_S, Prise, Sorte, temps};
 use crate::miniatures::Bande;
@@ -40,9 +40,11 @@ struct Piste {
     hauteur: f32,
 }
 
-const PISTES: [Piste; 8] = [
+/// La piste Webcam ne se montre que pour une prise filmée avec la webcam.
+const PISTES: [Piste; 9] = [
     Piste { nom: "Chapitres", sorte: Some(Sorte::Chapitre), couleur: charte::MARQUEUR, hauteur: 22.0 },
     Piste { nom: "Vidéos", sorte: Some(Sorte::Insertion), couleur: charte::PISTE_VIDEO, hauteur: 46.0 },
+    Piste { nom: "Webcam", sorte: Some(Sorte::Webcam), couleur: charte::PISTE_WEBCAM, hauteur: 24.0 },
     Piste { nom: "Zooms", sorte: Some(Sorte::Zoom), couleur: charte::PISTE_ZOOM, hauteur: 26.0 },
     Piste { nom: "Étiquettes", sorte: Some(Sorte::Etiquette), couleur: charte::PISTE_ETIQUETTE, hauteur: 26.0 },
     Piste { nom: "Clics", sorte: Some(Sorte::Clic), couleur: charte::TEXT_2, hauteur: 18.0 },
@@ -63,6 +65,7 @@ pub fn intervalle(m: &Montage, c: Choix) -> Option<(f64, f64)> {
         // Intercalée, elle ne prend pas de temps sur la prise : une marque à son instant.
         Sorte::Insertion => m.insertions.get(i).map(|e| (e.t, e.t + if e.par_dessus() { e.duree() } else { 0.1 })),
         Sorte::Chapitre => m.chapitres.get(i).map(|e| (e.t, e.t + 0.1)),
+        Sorte::Webcam => m.en_grand().get(i).map(|e| (e.debut, e.fin)),
     }
 }
 
@@ -76,6 +79,7 @@ fn regler(m: &mut Montage, c: Choix, a: f64, b: f64) {
         Sorte::Chapitre => m.chapitres.get_mut(i).map(|e| e.t = a),
         Sorte::SousTitre => m.sous_titres.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Coupe => m.coupes.get_mut(i).map(|e| (e.debut, e.fin) = (a, b)),
+        Sorte::Webcam => m.webcam.as_mut().and_then(|w| w.en_grand.get_mut(i)).map(|e| (e.debut, e.fin) = (a, b)),
         Sorte::Insertion => m.insertions.get_mut(i).map(|e| {
             e.t = a;
             if e.par_dessus() {
@@ -94,6 +98,7 @@ fn nombre(m: &Montage, s: Sorte) -> usize {
         Sorte::Coupe => m.coupes.len(),
         Sorte::Insertion => m.insertions.len(),
         Sorte::Chapitre => m.chapitres.len(),
+        Sorte::Webcam => m.en_grand().len(),
     }
 }
 
@@ -104,6 +109,7 @@ fn libelle(m: &Montage, c: Choix) -> String {
         Sorte::Etiquette => m.etiquettes.get(i).map(|e| e.texte.clone()),
         Sorte::Clic => None,
         Sorte::Chapitre => m.chapitres.get(i).map(|c| c.titre.clone()),
+        Sorte::Webcam => Some("en grand".into()),
         Sorte::Insertion => m.insertions.get(i).map(|e| {
             let nom = e.video.rsplit('/').next().unwrap_or(&e.video);
             format!("{nom} ({})", temps(e.duree()))
@@ -145,6 +151,11 @@ fn creer(m: &mut Montage, sorte: Sorte, a: f64, b: f64) -> Choix {
         // Une vidéo insérée ne se crée pas à la souris : il faut choisir son fichier.
         Sorte::Insertion => {}
         Sorte::Chapitre => m.chapitres.push(noyau::montage::Chapitre { t: a, titre: "Chapitre".into(), origine: "main".into(), autres: autres() }),
+        Sorte::Webcam => {
+            if let Some(w) = &mut m.webcam {
+                w.en_grand.push(EnGrand { debut: a, fin: b, autres: autres() });
+            }
+        }
     }
     let indice = nombre(m, sorte) - 1;
     Choix { sorte, indice }
@@ -237,11 +248,13 @@ impl Ligne {
 
         // Les pistes.
         // Les pistes remplissent le panneau : le tirer vers le haut les agrandit (jusqu'au double).
-        let total: f32 = PISTES.iter().map(|p| p.hauteur).sum();
+        let avec_webcam = prise.montage.webcam.is_some();
+        let pistes: Vec<&Piste> = PISTES.iter().filter(|p| avec_webcam || p.sorte != Some(Sorte::Webcam)).collect();
+        let total: f32 = pistes.iter().map(|p| p.hauteur).sum();
         let k = ((dispo[1] - REGLE) / total).clamp(1.0, 2.0);
         let mut y = origine[1] + REGLE;
         let mut rangees = Vec::new();
-        for piste in &PISTES {
+        for piste in pistes {
             let h = piste.hauteur * k;
             dl.add_rect([x0, y], [x1, y + h - 1.0], [0.102, 0.102, 0.102, 1.0]).filled(true).build();
             dl.add_rect([origine[0] + 8.0, y + h / 2.0 - 4.0], [origine[0] + 16.0, y + h / 2.0 + 4.0], c(piste.couleur))

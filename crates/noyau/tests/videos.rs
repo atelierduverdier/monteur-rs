@@ -184,3 +184,18 @@ fn youtube_comme_le_monteur1_sans_jamais_rien_envoyer() {
     let pourcents: Vec<_> = ["Envoi : 42,5 %", "12%", "x 7.25  % y", "100 %", "aucun", "3 4 %"].iter().map(|s| videos::lire_pourcentage(s)).collect();
     assert_eq!(json(pourcents), r["pourcentages"]);
 }
+
+/// La webcam filmée avec une prise (25/11/2026) n'est pas une prise de la liste, et part avec la sienne.
+#[test]
+fn la_webcam_suit_sa_prise() {
+    let d = jetable("webcam");
+    for nom in ["2026-11-25 05-02-12.mp4", "2026-11-25 05-02-12 webcam.mkv", "ma webcam.mp4"] {
+        std::fs::write(d.join(nom), nom).unwrap();
+    }
+    let mut liste = noms(&videos::lister_videos(&d));
+    liste.sort();
+    assert_eq!(liste, ["2026-11-25 05-02-12.mp4", "ma webcam.mp4"], "une vidéo à soi nommée « webcam » reste");
+    let lies = noms(&videos::fichiers_lies(&d.join("2026-11-25 05-02-12.mp4")));
+    assert!(lies.contains(&"2026-11-25 05-02-12 webcam.mkv".to_string()));
+    let _ = std::fs::remove_dir_all(&d);
+}

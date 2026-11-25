@@ -37,7 +37,9 @@ pub const SUFFIXES_DERIVES: [&str; 4] = [" avec vignette", " montage YouTube", "
 pub const SUFFIXE_COURT: &str = " court.mp4";
 pub const SUFFIXE_BROUILLON: &str = " brouillon.mp4";
 pub const SUFFIXE_GIF: &str = " extrait.gif";
-pub const SUFFIXES_LIES: [&str; 12] = [
+/// La webcam filmée avec la prise (25/11/2026) : pas une prise à elle seule, elle part avec la sienne.
+pub const SUFFIXE_WEBCAM: &str = " webcam.mkv";
+pub const SUFFIXES_LIES: [&str; 13] = [
     SUFFIXE_PNG,
     SUFFIXE_JPG,
     SUFFIXE_MONTEE,
@@ -50,6 +52,7 @@ pub const SUFFIXES_LIES: [&str; 12] = [
     SUFFIXE_COURT,
     SUFFIXE_BROUILLON,
     SUFFIXE_GIF,
+    SUFFIXE_WEBCAM,
 ];
 pub const EXTENSIONS: [&str; 3] = ["mp4", "mkv", "mov"];
 /// La vignette : 1280 × 720, l'image de la vidéo à droite sur 646 × 720 (charte du 23/10/2026).

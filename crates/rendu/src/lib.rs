@@ -79,6 +79,22 @@ pub fn commande_clip(chemin: &Path, debut: f64, duree: f64, l: u32, h: u32, ips:
     ]
 }
 
+/// La webcam à partir de sa seconde `debut`, à la cadence de la sortie et à la taille `l × h`.
+pub fn commande_webcam(chemin: &Path, debut: f64, l: u32, h: u32, ips: &str) -> Vec<String> {
+    vec![
+        s("ffmpeg"), s("-v"), s("error"), s("-ss"), format!("{debut:.3}"), s("-i"), chemin.to_string_lossy().into_owned(),
+        s("-an"), s("-vf"), format!("fps={ips},scale={l}:{h}"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgba"), s("-"),
+    ]
+}
+
+/// La taille où lire la webcam : la sienne, ramenée à 1280 de large au plus (assez pour toute l'image en grand).
+fn taille_webcam(l: i64, h: i64) -> (u32, u32) {
+    let (l, h) = (l.max(2) as f64, h.max(2) as f64);
+    let k = (1280.0 / l).min(1.0);
+    let pair = |x: f64| ((x * k / 2.0).round() as u32).max(1) * 2;
+    (pair(l), pair(h))
+}
+
 /// L'expression ffmpeg vraie dans les passages à retirer.
 /// Le volume autour de chaque fondu : il descend avant la coupe et remonte après, le temps du fondu
 /// d'image. Posé avant le retrait des coupes : les temps sont ceux de la prise.
@@ -284,15 +300,18 @@ fn lire_image(flux: &mut ChildStdout, n: usize) -> Option<Vec<u8>> {
     Some(b)
 }
 
+/// Une image de la webcam, à la taille où on la lit.
+type Camera = Option<Vec<u8>>;
+
 enum Image {
-    /// Une image de la prise, à peindre à l'instant t.
-    Prise { t: f64, rgba: Vec<u8> },
+    /// Une image de la prise, à peindre à l'instant t, avec celle de la webcam s'il y en a une.
+    Prise { t: f64, rgba: Vec<u8>, camera: Camera },
     /// Par-dessus : déjà à la taille de sortie ; seuls les sous-titres s'y posent.
     Dessus { t: f64, rgba: Vec<u8> },
     /// Intercalée : elle sort telle quelle.
     Clip { rgba: Vec<u8> },
     /// Un fondu : deux images de la prise, à peindre chacune à son instant, puis à mêler.
-    Fondu { avant: (f64, Vec<u8>), apres: (f64, Vec<u8>), poids: f32 },
+    Fondu { avant: (f64, Vec<u8>, Camera), apres: (f64, Vec<u8>, Camera), poids: f32 },
 }
 
 /// Un fondu en images de la prise : `h` images de chaque côté du début et de la fin de la coupe.
@@ -320,6 +339,8 @@ struct Lecture {
     h: u32,
     lo: u32,
     ho: u32,
+    /// La webcam à incruster : son fichier, et la taille où on la lit.
+    webcam: Option<(PathBuf, u32, u32)>,
 }
 
 impl Lecture {
@@ -341,12 +362,27 @@ impl Lecture {
         // Les images qui finissent le passage d'avant attendent celles qui commencent le passage
         // d'après : la prise se lit dans l'ordre. Au plus la durée d'un fondu : la mémoire reste bornée.
         let fondus: Vec<FonduImages> = self.montage.fondus().iter().map(|&(a, b, d)| FonduImages::de(a, b, d, self.ips)).collect();
-        let mut sortantes: std::collections::VecDeque<(f64, Vec<u8>)> = std::collections::VecDeque::new();
+        let mut sortantes: std::collections::VecDeque<(f64, Vec<u8>, Camera)> = std::collections::VecDeque::new();
+        // La webcam : une image par image de la prise dès qu'elle tourne, gardée ou non, pour rester calée à travers
+        // les coupes. Elle avait commencé avant la prise (decalage > 0) : on saute ce qui précède.
+        let decalage = self.montage.webcam.as_ref().map_or(0.0, |w| w.decalage);
+        let mut camera: Option<(Child, ChildStdout, usize)> = match &self.webcam {
+            Some((chemin, cl, ch)) => {
+                let mut c = lancer(&commande_webcam(chemin, decalage.max(0.0), *cl, *ch, &self.ips_texte), false)?;
+                let f = c.stdout.take().expect("sortie de la webcam");
+                Some((c, f, *cl as usize * *ch as usize * 4))
+            }
+            None => None,
+        };
         while !suivi.fin_de_lecture() {
             let Some(rgba) = lire_image(&mut flux, l * h * 4) else { break };
             let t = n as f64 / self.ips;
             n += 1;
             lues += 1;
+            let image_camera = match &mut camera {
+                Some((_, f, taille)) if t + decalage >= -1e-6 => lire_image(f, *taille),
+                _ => None,
+            };
             while prochaine < intercalees.len() && intercalees[prochaine].t <= t {
                 self.intercaler(intercalees[prochaine], &envoi, &mut ordre, suivi)?;
                 prochaine += 1;
@@ -377,7 +413,7 @@ impl Lecture {
             }
             let rang = n - 1;
             if fondus.iter().any(|f| rang + f.h >= f.debut && rang < f.debut + f.h) {
-                sortantes.push_back((t, rgba));
+                sortantes.push_back((t, rgba, image_camera));
                 continue;
             }
             if let Some(f) = fondus.iter().find(|f| rang + f.h >= f.fin && rang < f.fin + f.h)
@@ -385,7 +421,7 @@ impl Lecture {
             {
                 let k = rang + f.h - f.fin;
                 let poids = (k + 1) as f32 / (2 * f.h + 1) as f32;
-                if envoi.send((ordre, Image::Fondu { avant, apres: (t, rgba), poids })).is_err() {
+                if envoi.send((ordre, Image::Fondu { avant, apres: (t, rgba, image_camera), poids })).is_err() {
                     break;
                 }
                 ordre += 1;
@@ -396,7 +432,7 @@ impl Lecture {
             }
             let image = match remplace {
                 Some(rgba) => Image::Dessus { t, rgba },
-                None => Image::Prise { t, rgba },
+                None => Image::Prise { t, rgba, camera: image_camera },
             };
             if envoi.send((ordre, image)).is_err() {
                 break;
@@ -414,6 +450,11 @@ impl Lecture {
         if let Some(mut d) = dessus {
             let _ = d.2.kill();
             let _ = d.2.wait();
+        }
+        if let Some((mut c, f, _)) = camera {
+            drop(f);
+            let _ = c.kill();
+            let _ = c.wait();
         }
         if lues == 0 {
             return Err(Erreur("aucune image lue dans la vidéo".into()));
@@ -452,18 +493,20 @@ impl Lecture {
 }
 
 /// Peint une image ; un fil par cœur en fait tourner une à la fois.
-fn peindre(image: Image, c: &Compositeur, voix: &Compositeur, l: u32, h: u32, lo: u32, ho: u32) -> Option<Vec<u8>> {
+#[allow(clippy::too_many_arguments)]
+fn peindre(image: Image, c: &Compositeur, voix: &Compositeur, l: u32, h: u32, lo: u32, ho: u32, cam: (u32, u32)) -> Option<Vec<u8>> {
     let cible = R::new(0.0, 0.0, lo as f64, ho as f64);
-    let prise = |t: f64, rgba: Vec<u8>| {
+    let prise = |t: f64, rgba: Vec<u8>, camera: Camera| {
         let source = Pixmap::from_vec(rgba, IntSize::from_wh(l, h)?)?;
+        let camera = camera.and_then(|rgba| Pixmap::from_vec(rgba, IntSize::from_wh(cam.0, cam.1)?));
         let mut p = Pixmap::new(lo, ho)?;
-        c.peindre(&mut p.as_mut(), Some(source.as_ref()), t, cible, false);
+        c.peindre_avec_webcam(&mut p.as_mut(), Some(source.as_ref()), camera.as_ref().map(Pixmap::as_ref), t, cible, false);
         Some(p.take())
     };
     match image {
         Image::Clip { rgba } => Some(rgba),
         Image::Fondu { avant, apres, poids } => {
-            let (mut a, b) = (prise(avant.0, avant.1)?, prise(apres.0, apres.1)?);
+            let (mut a, b) = (prise(avant.0, avant.1, avant.2)?, prise(apres.0, apres.1, apres.2)?);
             let q = (poids * 256.0) as u32;
             for (x, y) in a.iter_mut().zip(&b) {
                 *x = ((*x as u32 * (256 - q) + *y as u32 * q) >> 8) as u8;
@@ -475,7 +518,7 @@ fn peindre(image: Image, c: &Compositeur, voix: &Compositeur, l: u32, h: u32, lo
             voix.peindre_calque(&mut p.as_mut(), t, cible, (0.0, 0.0, lo as f64, ho as f64), lo as f64, ho as f64);
             Some(p.take())
         }
-        Image::Prise { t, rgba } => prise(t, rgba),
+        Image::Prise { t, rgba, camera } => prise(t, rgba, camera),
     }
 }
 
@@ -506,6 +549,14 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
             return Err(Erreur(format!("Vidéo insérée introuvable : {}", i.video)));
         }
     }
+    // La webcam montrée, si son fichier se lit ; sinon le rendu se fait sans elle, comme l'aperçu.
+    let webcam = montage.webcam.as_ref().filter(|w| w.montrer).and_then(|w| {
+        let chemin = dossier.join(&w.video);
+        let infos = sonder(&chemin).ok()?;
+        let (cl, ch) = taille_webcam(infos.largeur, infos.hauteur);
+        Some((chemin, cl, ch))
+    });
+    let cam = webcam.as_ref().map_or((0, 0), |w| (w.1, w.2));
     let son = infos.son && pre.son;
     let fondus = montage.fondus();
     let volume = if son { filtre_son(video, &retire, &clips, &fondus, voix) } else { None };
@@ -536,7 +587,7 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
     let (envoi, recu): (SyncSender<(u64, Image)>, Receiver<(u64, Image)>) = sync_channel(fils);
     let recu = Mutex::new(recu);
     let (fait_envoi, fait_recu) = sync_channel::<(u64, Option<Vec<u8>>)>(fils);
-    let lecture = Lecture { video: video.to_path_buf(), dossier, montage: m.clone(), ips_texte, ips, l, h, lo, ho };
+    let lecture = Lecture { video: video.to_path_buf(), dossier, montage: m.clone(), ips_texte, ips, l, h, lo, ho, webcam };
 
     let mut resultat: Result<(), Erreur> = Ok(());
     let lu = std::thread::scope(|portee| {
@@ -547,7 +598,7 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
                 loop {
                     let suivant = recu.lock().ok().and_then(|r| r.recv().ok());
                     let Some((n, image)) = suivant else { return };
-                    if fait.send((n, peindre(image, c, v, l, h, lo, ho))).is_err() {
+                    if fait.send((n, peindre(image, c, v, l, h, lo, ho, cam))).is_err() {
                         return;
                     }
                 }

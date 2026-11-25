@@ -19,6 +19,8 @@ pub enum Sorte {
     Coupe,
     Insertion,
     Chapitre,
+    /// Un passage où la webcam passe en grand.
+    Webcam,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +52,8 @@ pub struct Prise {
     pub intercalee: Option<Intercalee>,
     /// La vidéo posée par-dessus la prise, ouverte : son fichier, sa lecture, sa dernière seconde.
     dessus: Option<(String, media::video::Video, f64)>,
+    /// La webcam ouverte, comme `dessus` ; `None` dans le second champ si son fichier ne s'ouvre pas.
+    webcam: Option<(String, Option<media::video::Video>, f64)>,
     /// La position au tour d'avant, pour voir la tête passer sur une insertion.
     t_avant: f64,
 }
@@ -104,6 +108,7 @@ impl Prise {
             version: 0,
             intercalee: None,
             dessus: None,
+            webcam: None,
             t_avant: 0.0,
         })
     }
@@ -199,6 +204,9 @@ impl Prise {
             Sorte::Coupe if c.indice < m.coupes.len() => drop(m.coupes.remove(c.indice)),
             Sorte::Insertion if c.indice < m.insertions.len() => drop(m.insertions.remove(c.indice)),
             Sorte::Chapitre if c.indice < m.chapitres.len() => drop(m.chapitres.remove(c.indice)),
+            Sorte::Webcam if c.indice < m.en_grand().len() => {
+                m.webcam.iter_mut().for_each(|w| drop(w.en_grand.remove(c.indice)));
+            }
             _ => {}
         }
         self.modifie();
@@ -348,6 +356,26 @@ impl Prise {
         d.1.image_a(s)
     }
 
+    /// L'image de la webcam à l'instant `t` de la prise, si elle est montrée et tourne déjà. Elle ne se montre pas
+    /// sur une vidéo insérée : l'aperçu les peint seules.
+    pub fn image_webcam(&mut self, t: f64) -> Option<&media::Image> {
+        let w = self.montage.webcam.as_ref().filter(|w| w.montrer)?;
+        let (relatif, s) = (w.video.clone(), w.instant(t)?);
+        let en_lecture = self.lecteur.en_lecture();
+        if self.webcam.as_ref().is_none_or(|d| d.0 != relatif) {
+            let video = media::video::Video::ouvrir(&self.chemin_insere(&relatif)).ok();
+            self.webcam = Some((relatif, video, f64::NEG_INFINITY));
+        }
+        let d = self.webcam.as_mut()?;
+        let video = d.1.as_mut()?;
+        let ecart = (s - d.2).abs();
+        if ecart > 0.25 || (!en_lecture && ecart > 0.001) {
+            video.aller_a(s);
+        }
+        d.2 = s;
+        video.image_a(s)
+    }
+
     /// S : coupe en deux, à la tête de lecture, l'élément choisi. Un sous-titre partage ses mots.
     pub fn scinder(&mut self, t: f64) -> String {
         let Some(c) = self.choix else { return "Choisis d'abord un élément dans la ligne de temps.".into() };
@@ -394,6 +422,15 @@ impl Prise {
                     None => false,
                 }
             }
+            Sorte::Webcam => match &mut m.webcam {
+                Some(w) => {
+                    let mut n = w.en_grand[i].clone();
+                    (w.en_grand[i].fin, n.debut) = (t, t);
+                    w.en_grand.push(n);
+                    true
+                }
+                None => false,
+            },
             Sorte::Insertion if m.insertions[i].par_dessus() => {
                 let mut n = m.insertions[i].clone();
                 let milieu = noyau::arrondi::arrondi(n.debut + (t - n.t), 3);
@@ -411,6 +448,23 @@ impl Prise {
         self.choix = None;
         self.modifie();
         "Coupé en deux à la tête de lecture.".into()
+    }
+
+    /// W : la webcam passe en grand à la tête de lecture, ou en revient.
+    pub fn basculer_webcam(&mut self, t: f64) -> String {
+        if self.montage.webcam.is_none() {
+            return "Pas de webcam pour cette prise : coche Fichier › Filmer aussi la webcam avant de filmer.".into();
+        }
+        self.retenir();
+        let duree = self.montage.duree;
+        let grand = self.montage.webcam.as_mut().is_some_and(|w| w.basculer(t, duree));
+        self.choix = None;
+        self.modifie();
+        if grand {
+            "Webcam en grand pour 5 s : W la ramène en vignette, ou retouche le passage dans la piste Webcam.".into()
+        } else {
+            "Webcam revenue en vignette.".into()
+        }
     }
 
     /// M : un chapitre à la tête de lecture, choisi pour lui donner son titre.

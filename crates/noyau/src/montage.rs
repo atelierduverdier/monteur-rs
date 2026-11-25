@@ -187,6 +187,136 @@ impl Insertion {
     }
 }
 
+/// LA WEBCAM (25/11/2026, Christophe : « l'incrustation d'une webcam […] que l'on peut déplacer, agrandir », et
+/// « agrandir la webcam pour effacer son travail, histoire de dire quelque chose aux gens, et revenir »). Filmée à part
+/// pendant la prise (`<prise> webcam.mkv`), elle s'incruste au montage : une vignette qu'on place et qu'on retaille,
+/// et des passages où elle passe en grand, cachant l'écran. Le Monteur 1 ne la connaît pas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Webcam {
+    /// Son fichier, relatif au dossier de la prise.
+    pub video: String,
+    /// La seconde de la webcam à l'instant 0 de la prise : elle tournait déjà pendant le choix de la fenêtre et le
+    /// décompte. Mesurée à la prise, à l'horloge ; se retouche à la main.
+    #[serde(default)]
+    pub decalage: f64,
+    #[serde(default = "vrai")]
+    pub montrer: bool,
+    /// Le coin haut gauche de la vignette, en fractions de l'image…
+    #[serde(default = "Webcam::x_defaut")]
+    pub x: f64,
+    #[serde(default = "Webcam::y_defaut")]
+    pub y: f64,
+    /// … et sa largeur, en fraction de la largeur de l'image (sa hauteur suit, aux proportions de la caméra).
+    #[serde(default = "Webcam::largeur_defaut")]
+    pub largeur: f64,
+    /// Les passages où elle passe en grand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub en_grand: Vec<EnGrand>,
+    #[serde(flatten)]
+    pub autres: Autres,
+}
+
+/// Un passage où la webcam prend toute l'image : elle grandit en `RAMPE` secondes, puis revient en vignette.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnGrand {
+    pub debut: f64,
+    pub fin: f64,
+    #[serde(flatten)]
+    pub autres: Autres,
+}
+
+/// Un passage en grand posé par W dure tant, à retoucher dans la ligne de temps.
+pub const EN_GRAND_DEFAUT: f64 = 5.0;
+/// Un rectangle en pixels : x, y, largeur, hauteur.
+pub type Rect = (f64, f64, f64, f64);
+/// La vignette ne descend pas sous ce dixième de la largeur, ni ne dépasse la moitié.
+pub const WEBCAM_MIN: f64 = 0.1;
+pub const WEBCAM_MAX: f64 = 0.5;
+
+impl Webcam {
+    fn x_defaut() -> f64 {
+        0.76
+    }
+    fn y_defaut() -> f64 {
+        0.70
+    }
+    fn largeur_defaut() -> f64 {
+        0.22
+    }
+
+    /// La webcam d'une prise neuve : en bas à droite, un peu moins d'un quart de la largeur.
+    pub fn nouvelle(video: String, decalage: f64) -> Self {
+        Self {
+            video,
+            decalage,
+            montrer: true,
+            x: Self::x_defaut(),
+            y: Self::y_defaut(),
+            largeur: Self::largeur_defaut(),
+            en_grand: Vec::new(),
+            autres: Autres::new(),
+        }
+    }
+
+    /// La seconde de la webcam à l'instant `t` de la prise ; `None` avant qu'elle tourne.
+    pub fn instant(&self, t: f64) -> Option<f64> {
+        let s = t + self.decalage;
+        (s >= 0.0).then_some(s)
+    }
+
+    /// 0 en vignette, 1 en grand ; entre les deux, la montée et la descente adoucies.
+    pub fn grandeur(&self, t: f64) -> f64 {
+        self.en_grand
+            .iter()
+            .filter(|p| p.fin > p.debut)
+            .map(|p| {
+                let rampe = RAMPE.min((p.fin - p.debut) / 2.0);
+                adoucir(((t - p.debut) / rampe).min((p.fin - t) / rampe))
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// W : la webcam passe en grand à `t` pour `EN_GRAND_DEFAUT` secondes (jusqu'au passage suivant ou à la fin au
+    /// plus), ou, si elle y est déjà, revient en vignette à `t` (un passage qui ne ferait que monter et redescendre
+    /// s'efface). Rend vrai quand elle passe en grand. En lecture, W puis W pose un passage à la volée.
+    pub fn basculer(&mut self, t: f64, duree: f64) -> bool {
+        let t = crate::arrondi::arrondi(t, 3);
+        if let Some(i) = self.en_grand.iter().position(|p| p.debut <= t && t < p.fin) {
+            if t - self.en_grand[i].debut < 2.0 * RAMPE {
+                self.en_grand.remove(i);
+            } else {
+                self.en_grand[i].fin = t;
+            }
+            return false;
+        }
+        let borne = if duree > 0.0 { duree } else { f64::MAX };
+        let fin = self.en_grand.iter().filter(|p| p.debut > t).map(|p| p.debut).fold((t + EN_GRAND_DEFAUT).min(borne), f64::min);
+        if fin - t < 2.0 * RAMPE {
+            return false;
+        }
+        self.en_grand.push(EnGrand { debut: t, fin: crate::arrondi::arrondi(fin, 3), autres: Autres::new() });
+        self.en_grand.sort_by(|a, b| a.debut.total_cmp(&b.debut));
+        true
+    }
+
+    /// Où la webcam se pose dans une image `l × h`, et la part de l'image de la caméra (`cl × ch`) qu'on y montre :
+    /// `((x, y, l, h), (sx, sy, sl, sh))` en pixels. En vignette, toute l'image de la caméra, gardée dans l'image ;
+    /// en grand, toute l'image, la caméra rognée à ses proportions ; entre les deux, l'un glisse vers l'autre.
+    pub fn place(&self, t: f64, l: f64, h: f64, cl: f64, ch: f64) -> (Rect, Rect) {
+        let proportion = if ch > 0.0 { cl / ch } else { 16.0 / 9.0 };
+        let vl = (self.largeur.clamp(WEBCAM_MIN, WEBCAM_MAX) * l).min(l);
+        let vh = (vl / proportion).min(h);
+        let vx = (self.x * l).clamp(0.0, l - vl);
+        let vy = (self.y * h).clamp(0.0, h - vh);
+        // En grand : l'image de la caméra rognée aux proportions de la vidéo, au milieu.
+        let (gl, gh) = if cl / ch.max(1.0) > l / h { (ch * l / h, ch) } else { (cl, cl * h / l) };
+        let (gx, gy) = ((cl - gl) / 2.0, (ch - gh) / 2.0);
+        let g = self.grandeur(t);
+        let m = |a: f64, b: f64| a + (b - a) * g;
+        ((m(vx, 0.0), m(vy, 0.0), m(vl, l), m(vh, h)), (m(0.0, gx), m(0.0, gy), m(cl, gl), m(ch, gh)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Reglages {
@@ -258,6 +388,8 @@ pub struct Montage {
     pub insertions: Vec<Insertion>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub chapitres: Vec<Chapitre>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webcam: Option<Webcam>,
     pub reglages: Reglages,
     #[serde(flatten)]
     pub autres: Autres,
@@ -279,6 +411,7 @@ impl Default for Montage {
             coupes: Vec::new(),
             insertions: Vec::new(),
             chapitres: Vec::new(),
+            webcam: None,
             reglages: Reglages::default(),
             autres: Autres::new(),
         }
@@ -342,6 +475,7 @@ impl Montage {
             coupes: elements(&mut d, "coupes"),
             insertions: elements(&mut d, "insertions"),
             chapitres: elements(&mut d, "chapitres"),
+            webcam: d.remove("webcam").and_then(|w| serde_json::from_value(w).ok()),
             reglages: match d.remove("reglages") {
                 Some(r @ Value::Object(_)) => serde_json::from_value(r).unwrap_or_default(),
                 _ => Reglages::default(),
@@ -386,6 +520,14 @@ impl Montage {
         self.coupes.sort_by(|a, b| ordre(a.debut, b.debut));
         self.insertions.sort_by(|a, b| ordre(a.t, b.t));
         self.chapitres.sort_by(|a, b| ordre(a.t, b.t));
+        if let Some(w) = &mut self.webcam {
+            w.en_grand.sort_by(|a, b| ordre(a.debut, b.debut));
+        }
+    }
+
+    /// Les passages où la webcam est en grand (aucun sans webcam).
+    pub fn en_grand(&self) -> &[EnGrand] {
+        self.webcam.as_ref().map_or(&[], |w| &w.en_grand)
     }
 
     fn borne(&self, fin: f64) -> f64 {
@@ -616,3 +758,57 @@ mod tests_fondus {
     }
 }
 
+#[cfg(test)]
+mod tests_webcam {
+    use super::*;
+
+    #[test]
+    fn la_webcam_se_relit_et_le_monteur_1_n_en_voit_rien() {
+        let mut m = Montage { duree: 30.0, largeur: 1920, hauteur: 1200, ..Montage::default() };
+        assert!(m.en_valeur().get("webcam").is_none(), "sans webcam, rien d'écrit");
+        let mut w = Webcam::nouvelle("2026-11-25 05-02-12 webcam.mkv".into(), 4.25);
+        w.en_grand.push(EnGrand { debut: 10.0, fin: 14.0, autres: Autres::new() });
+        m.webcam = Some(w.clone());
+        let relu = Montage::depuis_valeur(m.en_valeur()).unwrap();
+        assert_eq!(relu.webcam, Some(w));
+        // Un montage d'avant la webcam se lit toujours, sans elle.
+        let ancien = serde_json::json!({"format": 1, "video": "x.mp4", "duree": 3, "largeur": 10, "hauteur": 10});
+        assert_eq!(Montage::depuis_valeur(ancien).unwrap().webcam, None);
+    }
+
+    #[test]
+    fn la_webcam_passe_en_grand_puis_revient() {
+        let mut w = Webcam::nouvelle("w.mkv".into(), 2.0);
+        assert_eq!(w.instant(-3.0), None, "avant qu'elle tourne");
+        assert_eq!(w.instant(1.0), Some(3.0));
+        w.en_grand.push(EnGrand { debut: 10.0, fin: 20.0, autres: Autres::new() });
+        assert_eq!(w.grandeur(5.0), 0.0);
+        assert_eq!(w.grandeur(15.0), 1.0);
+        assert!(w.grandeur(10.0 + RAMPE / 2.0) > 0.0 && w.grandeur(10.0 + RAMPE / 2.0) < 1.0, "elle grandit");
+        assert_eq!(w.grandeur(20.5), 0.0);
+        // En vignette : aux proportions de la caméra, dans l'image ; en grand : toute l'image, la caméra rognée.
+        let ((x, y, l, h), source) = w.place(5.0, 1920.0, 1200.0, 1280.0, 720.0);
+        assert!((l / h - 16.0 / 9.0).abs() < 1e-9 && x + l <= 1920.0 && y + h <= 1200.0);
+        assert_eq!(source, (0.0, 0.0, 1280.0, 720.0));
+        let (cible, (sx, sy, sl, sh)) = w.place(15.0, 1920.0, 1200.0, 1280.0, 720.0);
+        assert_eq!(cible, (0.0, 0.0, 1920.0, 1200.0));
+        assert!((sl / sh - 1.6).abs() < 1e-9 && sh == 720.0 && sy == 0.0 && (sx - (1280.0 - sl) / 2.0).abs() < 1e-9);
+        // W : en grand pour 5 s, puis W au milieu la ramène ; W juste après le début efface le passage.
+        let mut v = Webcam::nouvelle("w.mkv".into(), 0.0);
+        assert!(v.basculer(3.0, 60.0));
+        assert_eq!((v.en_grand[0].debut, v.en_grand[0].fin), (3.0, 3.0 + EN_GRAND_DEFAUT));
+        assert!(!v.basculer(5.5, 60.0));
+        assert_eq!(v.en_grand[0].fin, 5.5);
+        assert!(v.basculer(58.0, 60.0), "borné par la fin");
+        assert_eq!(v.en_grand[1].fin, 60.0);
+        assert!(!v.basculer(58.2, 60.0));
+        assert_eq!(v.en_grand.len(), 1, "à peine commencé : effacé");
+        assert!(v.basculer(1.0, 60.0));
+        assert_eq!(v.en_grand[0].fin, 3.0, "jusqu'au passage suivant");
+        // Posée trop à droite ou trop grande, elle reste dans l'image.
+        w.x = 0.99;
+        w.largeur = 0.9;
+        let ((x, _, l, _), _) = w.place(5.0, 1920.0, 1200.0, 1280.0, 720.0);
+        assert!(l <= WEBCAM_MAX * 1920.0 + 1e-9 && x + l <= 1920.0 + 1e-9);
+    }
+}

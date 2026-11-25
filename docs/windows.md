@@ -270,6 +270,9 @@ Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Wi
   premier échantillon. À l'arrêt, ffmpeg les cale sur la première image et les mêle, le micro des deux côtés.
 - **Le décompte** se joue avant la première image : la fenêtre est déjà choisie. **Windows+F12** arrête
   (`RegisterHotKey`). Fermer le Monteur en filmant termine la prise.
+- **La webcam** (25/11/2026, docs/filmer.md) : par DirectShow, le ffmpeg.exe du paquet (`-f dshow`, la caméra
+  trouvée par `-list_devices`), en 1280 × 720 à 30 i/s, sinon telle qu'elle se donne. Pas encore essayée sur un vrai
+  Windows.
 
 Essayé ici : 6 contrôles d'`enregistreur.rs` sous Linux, dont une vraie prise de 2 s par une source factice
 (60 images, nom d'OBS, rien qui traîne), un mélange réel (une piste stéréo, 2 s) et le calage (saboté : il

@@ -58,7 +58,8 @@ pub trait Source {
 pub type Demarrer = Box<dyn FnOnce(Dernier) -> Result<Box<dyn Source>, String>>;
 
 pub enum Fin {
-    Prise(PathBuf),
+    /// La prise, et l'heure murale de son instant 0 (la webcam s'y cale).
+    Prise(PathBuf, f64),
     Annulee,
     Erreur(String),
 }
@@ -92,7 +93,7 @@ pub fn zone_cliente(cadre: (i32, i32), origine: (i32, i32), client: (i32, i32), 
 }
 
 /// Un encodeur H.264 : son nom pour ffmpeg et ses réglages. Ceux des cartes graphiques d'abord, x264 sinon.
-fn encodeur() -> &'static [&'static str] {
+pub(crate) fn encodeur() -> &'static [&'static str] {
     static CHOISI: OnceLock<&'static [&'static str]> = OnceLock::new();
     const CARTES: [&[&str]; 3] = [
         &["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0", "-pix_fmt", "yuv420p"],
@@ -335,7 +336,7 @@ fn conclure(dossier: &Path, video: Result<Option<Video>, String>, sons: Vec<Resu
         Ok(o) if o.status.success() => match std::fs::rename(&melange, &cible) {
             Ok(()) => {
                 nettoyer();
-                Fin::Prise(cible)
+                Fin::Prise(cible, video.premiere.duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()))
             }
             Err(e) => Fin::Erreur(format!("Prise gardée sous {} : {e}", melange.display())),
         },
@@ -651,7 +652,7 @@ mod tests {
             fin = e.suivre();
             std::thread::sleep(Duration::from_millis(20));
         }
-        let Some(Fin::Prise(p)) = fin else { panic!("pas de prise") };
+        let Some(Fin::Prise(p, _)) = fin else { panic!("pas de prise") };
         let infos = sonder(&p);
         let restes: Vec<_> = std::fs::read_dir(&d).unwrap().filter_map(Result::ok).map(|f| f.file_name().to_string_lossy().into_owned()).collect();
         let _ = std::fs::remove_dir_all(&d);

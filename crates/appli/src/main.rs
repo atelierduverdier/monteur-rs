@@ -28,6 +28,7 @@ mod telechargement;
 mod vignette;
 mod voix;
 mod vue;
+mod webcam;
 mod youtube;
 
 use std::path::{Path, PathBuf};
@@ -94,6 +95,14 @@ enum Saisie {
     Deplacer([f32; 2], f64, f64),
     /// Un coin, ou un cadre neuf qu'on trace : le point fixe, en fractions de l'image.
     Tracer(f64, f64),
+}
+
+/// Ce que la souris tient de la webcam dans la visionneuse : départ de la souris, et la place (x, y) ou la largeur
+/// de départ.
+#[derive(Clone, Copy)]
+enum SaisieWebcam {
+    Deplacer([f32; 2], f64, f64),
+    Retailler([f32; 2], f64),
 }
 
 /// Les boutons de lecture, dessinés (Inter n'a pas ces signes en assez net).
@@ -203,6 +212,13 @@ struct Monteur {
     a_ouvrir: Option<PathBuf>,
     /// Le réglage d'un zoom à l'arrêt : ce que la souris tient dans la visionneuse.
     cadre_saisi: Option<Saisie>,
+    webcam_saisie: Option<SaisieWebcam>,
+    /// La webcam qui se filme avec la prise.
+    webcam: Option<webcam::Webcam>,
+    /// Les caméras du poste, cherchées une fois (sous Windows, ffmpeg les liste).
+    cameras: Option<Vec<webcam::Camera>>,
+    /// La caméra filmée avec chaque prise ; `None` : pas de webcam (`monteur/webcam`).
+    camera_choisie: Option<String>,
     miniatures: miniatures::Miniatures,
     fiches: Fiches,
     /// Une fiche changée, pas encore écrite.
@@ -293,6 +309,27 @@ fn dossier_de_depart(fiches: &Fiches) -> PathBuf {
 type Filtre = (&'static str, &'static [&'static str]);
 const FILTRE_VIDEOS: Filtre = ("Vidéos", &["mp4", "mkv", "mov", "MP4", "MKV", "MOV"]);
 const FILTRE_PROJETS: Filtre = ("Projets du Monteur", &["monteur"]);
+/// La webcam filmée avec la prise `video` (instant 0 à l'heure `debut`) prend son nom, et le montage de la prise
+/// l'incruste, calée. Rend ce que le message de fin en dit.
+fn ranger_webcam(video: &Path, debut: f64, webcam: Result<(PathBuf, f64), String>) -> String {
+    let (partiel, debut_webcam) = match webcam {
+        Ok(w) => w,
+        Err(e) => return format!(" {e}"),
+    };
+    let cible = noyau::chemin_derive(video, noyau::SUFFIXE_WEBCAM);
+    if let Err(e) = std::fs::rename(&partiel, &cible) {
+        return format!(" Webcam gardée sous {} : {e}", partiel.display());
+    }
+    let chemin = etat::chemin_montage(video);
+    let mut montage = noyau::montage::Montage::lire(&chemin).unwrap_or_default();
+    let nom = cible.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    montage.webcam = Some(noyau::montage::Webcam::nouvelle(nom, noyau::arrondi::arrondi(debut - debut_webcam, 3)));
+    match montage.ecrire(&chemin) {
+        Ok(()) => " Webcam filmée aussi.".into(),
+        Err(e) => format!(" Webcam filmée, mais le montage ne s'écrit pas : {e}"),
+    }
+}
+
 /// La fin du message quand on filme un VerdierCAM déjà ouvert.
 fn gestes_notes(note: bool) -> &'static str {
     if note {
@@ -326,6 +363,11 @@ const DELAI_VERDIERCAM: std::time::Duration = std::time::Duration::from_secs(4);
 
 fn chemin_voix() -> PathBuf {
     chemin_fiches().with_file_name("voix.json")
+}
+
+/// La caméra filmée avec chaque prise (ce que ffmpeg ouvre) ; pas de fichier : pas de webcam.
+fn chemin_webcam() -> PathBuf {
+    chemin_fiches().with_file_name("webcam")
 }
 
 #[cfg(windows)]
@@ -391,6 +433,10 @@ impl Monteur {
             mono: None,
             a_ouvrir: None,
             cadre_saisi: None,
+            webcam_saisie: None,
+            webcam: None,
+            cameras: None,
+            camera_choisie: std::fs::read_to_string(chemin_webcam()).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             miniatures,
             fiches,
             fiches_sales: false,
@@ -764,6 +810,38 @@ impl Monteur {
         };
     }
 
+    /// Les caméras du poste, cherchées la première fois qu'on en a besoin.
+    fn cameras(&mut self) -> &[webcam::Camera] {
+        self.cameras.get_or_insert_with(webcam::cameras)
+    }
+
+    /// La webcam choisie se met à filmer avec la prise, dans le même dossier.
+    fn lancer_webcam(&mut self, dossier: &Path) {
+        let Some(entree) = self.camera_choisie.clone() else { return };
+        let camera = self.cameras().iter().find(|c| c.entree == entree).cloned().unwrap_or(webcam::Camera { nom: entree.clone(), entree });
+        self.webcam = Some(webcam::Webcam::lancer(&camera, dossier));
+    }
+
+    /// Fichier › Filmer aussi la webcam : la caméra choisie (la première trouvée par défaut), ou plus de webcam.
+    fn choisir_camera(&mut self, entree: Option<String>) {
+        match entree.or_else(|| self.cameras().first().map(|c| c.entree.clone())) {
+            Some(e) => {
+                let _ = std::fs::create_dir_all(noyau::systeme::donnees());
+                let _ = std::fs::write(chemin_webcam(), &e);
+                let nom = self.cameras().iter().find(|c| c.entree == e).map_or(e.clone(), |c| c.nom.clone());
+                self.message = format!("La webcam ({nom}) sera filmée avec chaque prise.");
+                self.camera_choisie = Some(e);
+            }
+            None => self.message = "Aucune webcam trouvée sur ce poste.".into(),
+        }
+    }
+
+    fn oublier_camera(&mut self) {
+        let _ = std::fs::remove_file(chemin_webcam());
+        self.camera_choisie = None;
+        self.message = "La webcam ne sera plus filmée.".into();
+    }
+
     /// VerdierCAM déjà ouvert : faux s'il ne l'est pas. Sous Linux, le dialogue de KDE demande sa fenêtre.
     #[cfg(not(windows))]
     fn filmer_verdiercam_ouvert(&mut self, gestes: &Path) -> bool {
@@ -864,6 +942,9 @@ impl Monteur {
                 self.capture_simple = simple;
                 self.message = "Choisis la fenêtre à filmer.".into();
                 self.raccourci.get_or_insert_with(raccourci::lancer);
+                if !simple {
+                    self.lancer_webcam(&dossier);
+                }
             }
             Err(e) => self.message = e,
         }
@@ -887,16 +968,25 @@ impl Monteur {
         }
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
+        let webcam = self.webcam.take().map(webcam::Webcam::finir);
+        let note_webcam = match (&fin, webcam) {
+            (capture::Fin::Prise(p, debut), Some(w)) if !self.capture_simple => ranger_webcam(p, *debut, w),
+            (_, Some(Ok((partiel, _)))) => {
+                let _ = std::fs::remove_file(partiel);
+                String::new()
+            }
+            _ => String::new(),
+        };
         self.message = match fin {
-            capture::Fin::Prise(p) if self.capture_simple => {
+            capture::Fin::Prise(p, _) if self.capture_simple => {
                 if self.dossier.chemin == self.copies {
                     self.a_changer = Some(self.copies.clone());
                 }
                 format!("Vidéo enregistrée : {} ({}).", p.display(), chrono_court(duree))
             }
-            capture::Fin::Prise(p) => {
+            capture::Fin::Prise(p, _) => {
                 self.a_changer = Some(self.dossier.chemin.clone());
-                let message = format!("Prise enregistrée : {} ({}). Préparation en cours.", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree));
+                let message = format!("Prise enregistrée : {} ({}). Préparation en cours.{note_webcam}", p.file_name().unwrap_or_default().to_string_lossy(), chrono_court(duree));
                 self.a_ouvrir = Some(p.clone());
                 self.a_preparer = Some(p);
                 message
@@ -932,6 +1022,9 @@ impl Monteur {
                 self.capture_simple = simple;
                 self.message = format!("On filme « {} ».", fenetre.titre);
                 self.raccourci.get_or_insert_with(raccourci::lancer);
+                if !simple {
+                    self.lancer_webcam(&dossier);
+                }
             }
             Err(e) => self.message = e,
         }
@@ -1134,6 +1227,9 @@ impl Monteur {
             p.poser_chapitre(t);
             self.message = "Chapitre posé à la tête : donne-lui son titre dans l'inspecteur.".into();
         }
+        if ui.is_key_pressed(Key::W) && !ctrl {
+            self.message = p.basculer_webcam(t);
+        }
         if ui.is_key_pressed(Key::Z) && !ctrl {
             p.nouveau_zoom(t);
             self.message = "Zoom posé : trace son cadre dans la visionneuse.".into();
@@ -1294,6 +1390,18 @@ impl Monteur {
             if let Some(db) = c.niveau().filter(|_| !c.en_finition()) {
                 ui.same_line();
                 vu_metre(ui, db, c.micro_muet());
+            }
+            // La webcam filmée avec la prise : verte dès sa première image.
+            if let Some(w) = &self.webcam {
+                ui.same_line();
+                // À la hauteur de la barre du vu-mètre (30 px, la barre au milieu).
+                let p = ui.cursor_pos();
+                ui.set_cursor_pos([p[0], p[1] + 7.0]);
+                let (couleur, texte) = if w.tourne() { (charte::SUCCES_TEXTE, "● webcam") } else { (charte::TEXT_2, "○ webcam…") };
+                ui.text_colored(charte::c(couleur), texte);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text(format!("{} : filmée à part, incrustée au montage.", w.camera.nom));
+                }
             }
         } else {
             if outil(ui, "##filmer", Icone::Filmer, "Filmer", charte::ERREUR, Allure::Simple, "Filme une fenêtre, ou tout l'écran pour en montrer plusieurs : le choix s'ouvre à chaque fois. Les gestes de VerdierCAM ne sont notés que s'il a été lancé par Filmer VerdierCAM. La prise arrive dans la liste. Fichier › Enregistrement simple pour une vidéo vite faite dans Copies d'écran.") {
@@ -1595,6 +1703,50 @@ impl Monteur {
                     }
                     p.modifie();
                 }
+            } else if !p.lecteur.en_lecture()
+                && let Some(camera) = self.vue.taille_camera()
+                && let Some(w) = p.montage.webcam.clone().filter(|w| w.montrer && w.grandeur(p.lecteur.position()) == 0.0)
+            {
+                // LA WEBCAM À LA SOURIS, à l'arrêt et en vignette : glisser dedans la déplace, son coin bas droit la
+                // retaille. La place se garde en fractions de l'image, la taille en fraction de sa largeur.
+                let cible = composeur::dessin::R::new(coin[0] as f64, coin[1] as f64, taille[0] as f64, taille[1] as f64);
+                let r = composeur::dessin::rect_webcam(&w, p.lecteur.position(), cible, camera);
+                let (a, b) = ([r.x as f32, r.y as f32], [(r.x + r.l) as f32, (r.y + r.h) as f32]);
+                let souris = ui.io().mouse_pos();
+                let dessus = souris[0] >= a[0] && souris[0] <= b[0] && souris[1] >= a[1] && souris[1] <= b[1];
+                let poignee = (souris[0] - b[0]).abs() <= 10.0 && (souris[1] - b[1]).abs() <= 10.0;
+                if ui.is_item_hovered() && (dessus || poignee) || self.webcam_saisie.is_some() {
+                    let dl = ui.get_window_draw_list();
+                    dl.add_rect(a, b, charte::c(charte::ACCENT)).thickness(2.0).build();
+                    dl.add_rect([b[0] - 6.0, b[1] - 6.0], [b[0] + 6.0, b[1] + 6.0], charte::c(charte::ACCENT)).filled(true).build();
+                    if poignee || matches!(self.webcam_saisie, Some(SaisieWebcam::Retailler(..))) {
+                        ui.set_mouse_cursor(Some(MouseCursor::ResizeNWSE));
+                    } else {
+                        ui.set_mouse_cursor(Some(MouseCursor::ResizeAll));
+                    }
+                    if ui.is_item_hovered() && ui.is_mouse_clicked(MouseButton::Left) {
+                        p.retenir();
+                        self.webcam_saisie = Some(if poignee { SaisieWebcam::Retailler(souris, w.largeur) } else { SaisieWebcam::Deplacer(souris, w.x, w.y) });
+                    }
+                }
+                if !ui.is_mouse_down(MouseButton::Left) {
+                    self.webcam_saisie = None;
+                }
+                if let (Some(saisie), Some(ww)) = (self.webcam_saisie, p.montage.webcam.as_mut()) {
+                    let arrondi = |v: f64| noyau::arrondi::arrondi(v, 3);
+                    match saisie {
+                        SaisieWebcam::Deplacer(depart, x0, y0) => {
+                            let (fl, fh) = (r.l / cible.l, r.h / cible.h);
+                            ww.x = arrondi((x0 + ((souris[0] - depart[0]) / taille[0]) as f64).clamp(0.0, 1.0 - fl));
+                            ww.y = arrondi((y0 + ((souris[1] - depart[1]) / taille[1]) as f64).clamp(0.0, 1.0 - fh));
+                        }
+                        SaisieWebcam::Retailler(depart, l0) => {
+                            let l = l0 + ((souris[0] - depart[0]) / taille[0]) as f64;
+                            ww.largeur = arrondi(l.clamp(noyau::montage::WEBCAM_MIN, noyau::montage::WEBCAM_MAX));
+                        }
+                    }
+                    p.modifie();
+                }
             }
         }
         // Le transport.
@@ -1643,6 +1795,8 @@ impl Monteur {
     }
 
     fn panneau_inspecteur(&mut self, ui: &Ui) {
+        // Les proportions de la caméra, pour poser la vignette dans un coin.
+        let camera = self.vue.taille_camera().unwrap_or((16.0, 9.0));
         let Some(p) = &mut self.prise else { return };
         // Assez de place à droite des champs pour leur nom entier.
         let _largeur = ui.push_item_width(ui.content_region_avail()[0] - 150.0);
@@ -1739,6 +1893,14 @@ impl Monteur {
                 let c = &mut p.montage.clics[indice];
                 change |= nombre(ui, "Instant (s)", &mut c.t, 0.1);
             }
+            Some(Choix { sorte: Sorte::Webcam, indice }) if indice < p.montage.en_grand().len() => {
+                titre(ui, "Webcam en grand");
+                if let Some(e) = p.montage.webcam.as_mut().and_then(|w| w.en_grand.get_mut(indice)) {
+                    change |= nombre(ui, "Début (s)", &mut e.debut, 0.1);
+                    change |= nombre(ui, "Fin (s)", &mut e.fin, 0.1);
+                }
+                ui.text_wrapped("La webcam cache l'écran pour parler aux gens : elle grandit au début, revient en vignette à la fin. Les sous-titres restent.");
+            }
             _ => {
                 titre(ui, "Réglages du montage");
                 let r = &mut p.montage.reglages;
@@ -1764,6 +1926,40 @@ impl Monteur {
                 if nombre(ui, "Calage des gestes (s)", &mut cale, 0.05) {
                     r.decalage_journal = cale;
                     change = true;
+                }
+                let (lv, hv) = (p.montage.largeur.max(1) as f64, p.montage.hauteur.max(1) as f64);
+                if let Some(w) = &mut p.montage.webcam {
+                    ui.separator();
+                    titre(ui, "Webcam");
+                    change |= ui.checkbox("Montrer la webcam", &mut w.montrer);
+                    let mut taille = (w.largeur * 100.0) as f32;
+                    ui.set_next_item_width(120.0);
+                    let (min, max) = ((noyau::montage::WEBCAM_MIN * 100.0) as f32, (noyau::montage::WEBCAM_MAX * 100.0) as f32);
+                    let bouge = match dear_imgui_rs::NumericFormat::<f32>::new("%.0f %%".to_string()) {
+                        Ok(f) => ui.slider_config("Taille (largeur)", min, max).display_format(f).build(&mut taille),
+                        Err(_) => ui.slider_f32("Taille (largeur)", &mut taille, min, max),
+                    };
+                    if bouge {
+                        w.largeur = (taille as f64).round() / 100.0;
+                        change = true;
+                    }
+                    // Les quatre coins, à 2 % des bords.
+                    let haut = w.largeur * lv / (camera.0 / camera.1) / hv;
+                    let (gauche, droite, en_haut, en_bas) = (0.02, 1.0 - w.largeur - 0.02, 0.03, 1.0 - haut - 0.03);
+                    for (i, (nom, x, y)) in [("Haut gauche", gauche, en_haut), ("Haut droite", droite, en_haut), ("Bas gauche", gauche, en_bas), ("Bas droite", droite, en_bas)].into_iter().enumerate() {
+                        if i % 2 == 1 {
+                            ui.same_line();
+                        }
+                        if ui.button_with_size(format!("{nom}##coin_webcam"), [110.0, 0.0]) {
+                            (w.x, w.y) = (noyau::arrondi::arrondi(x, 3), noyau::arrondi::arrondi(y.max(0.0), 3));
+                            change = true;
+                        }
+                    }
+                    change |= nombre(ui, "Calage de la webcam (s)", &mut w.decalage, 0.05);
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("La seconde de la webcam au début de la prise : mesurée en filmant. Plus grand, elle montre plus tard.");
+                    }
+                    ui.text_wrapped("Dans la visionneuse, à l'arrêt : glisser la webcam la déplace, son coin bas droit la retaille. W la passe en grand à la tête de lecture (W encore : la ramène), ou glisser dans la piste Webcam.");
                 }
                 ui.separator();
                 ui.text_wrapped("Un clic sur un élément de la ligne de temps le montre ici.");
@@ -2040,6 +2236,24 @@ impl Application for Monteur {
                 if ui.menu_item_enabled_selected_no_shortcut("Enregistrement simple…", false, self.capture.is_none()) {
                     self.capture_prevue = None;
                     self.filmer_simple();
+                }
+                // La webcam filmée avec chaque prise (pas avec l'enregistrement simple), puis incrustée au montage.
+                let avec = self.camera_choisie.is_some();
+                if ui.menu_item_enabled_selected_no_shortcut("Filmer aussi la webcam", avec, self.capture.is_none()) {
+                    if avec { self.oublier_camera() } else { self.choisir_camera(None) }
+                }
+                if avec && self.capture.is_none() {
+                    let cameras = self.cameras().to_vec();
+                    if cameras.len() > 1
+                        && let Some(sous) = ui.begin_menu("Quelle webcam")
+                    {
+                        for c in cameras {
+                            if ui.menu_item_enabled_selected_no_shortcut(&c.nom, self.camera_choisie.as_ref() == Some(&c.entree), true) {
+                                self.choisir_camera(Some(c.entree.clone()));
+                            }
+                        }
+                        sous.end();
+                    }
                 }
                 if ui.menu_item_enabled_selected_no_shortcut("Mettre la prise à la corbeille…", false, self.prise.is_some())
                     && let Some(p) = &self.prise

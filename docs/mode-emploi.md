@@ -64,6 +64,23 @@ même si ton micro n'en donne qu'un.
 
 La prise arrive dans la liste, s'ouvre, et **Préparer le montage** se lance tout seul.
 
+## La webcam
+
+Pour te montrer dans la vidéo : coche **Fichier › Filmer aussi la webcam** (s'il y a plusieurs caméras, **Quelle
+webcam** choisit la bonne). Elle est alors filmée avec chaque prise (pas avec l'enregistrement simple) : « ● webcam »
+s'allume à côté du vu-mètre. Elle s'enregistre à part, à côté de la prise (`… webcam.mkv`), et s'incruste au
+montage, calée toute seule :
+
+- **La vignette**, en bas à droite au départ. Dans la visionneuse, à l'arrêt : glisse-la pour la déplacer, tire son
+  coin bas droit pour la retailler. L'inspecteur (rien de choisi dans la ligne de temps) la montre ou la cache, règle
+  sa taille, la pose dans un coin, et retouche son calage.
+- **En grand**, pour parler aux gens en cachant ton travail : **W** à la tête de lecture la fait grandir jusqu'à
+  toute l'image pour 5 s ; **W** encore la ramène en vignette. Les passages se voient dans la piste **Webcam** de la
+  ligne de temps : ils s'y glissent, s'allongent, et un glisser dans la piste en crée un. Tes sous-titres restent
+  par-dessus.
+
+Ce que tu vois est ce qui sort : le rendu incruste la webcam comme la visionneuse.
+
 ## Les prises et les projets
 
 À gauche, la liste des prises du dossier : miniature, date, durée, et leur état (montée, vignette, envoyée). Un
@@ -110,6 +127,7 @@ Les touches :
 | Z | un zoom à la tête |
 | S | couper en deux l'élément choisi |
 | M | un chapitre |
+| W | la webcam en grand à la tête, ou de retour en vignette |
 | Suppr, Échap | supprimer, désélectionner |
 | Ctrl+Z, Ctrl+Maj+Z | annuler, rétablir |
 | Ctrl+S | enregistrer le projet (le montage s'enregistre aussi tout seul) |
@@ -146,7 +164,8 @@ JPG à côté de la vidéo) dans « Miniature ».
 ## Où sont les fichiers
 
 - Les prises : Vidéos › Copies d'écran ; les projets : Vidéos › Projets.
-- À côté de chaque vidéo : son montage (`… montage.json`), sa vignette, ses rendus, sa description.
+- À côté de chaque vidéo : son montage (`… montage.json`), sa webcam (`… webcam.mkv`), sa vignette, ses rendus, sa
+  description.
 - Les réglages du Monteur : `AppData\Roaming\monteur` sous Windows, `~/.local/share/monteur` sous Linux.
 
 ## Licence

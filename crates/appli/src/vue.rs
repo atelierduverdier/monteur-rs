@@ -17,6 +17,10 @@ struct Texture {
     h: u32,
 }
 
+/// Ce qui a servi à une peinture : l'image de la prise, la version du montage, la taille, sans zoom ?, l'instant,
+/// l'image insérée et celle de la webcam.
+type Cle = (u64, u64, u32, u32, bool, u64, u64, u64);
+
 pub struct Vue {
     texture: Option<Texture>,
     sortie: Option<Pixmap>,
@@ -24,10 +28,13 @@ pub struct Vue {
     source: Option<Pixmap>,
     source_t: f64,
     /// Ce qui a servi à la dernière peinture : rien n'a bougé, on ne repeint pas.
-    cle: Option<(u64, u64, u32, u32, bool, u64, u64)>,
+    cle: Option<Cle>,
     /// La dernière image d'une vidéo insérée, et son instant.
     insere: Option<Pixmap>,
     insere_t: f64,
+    /// La dernière image de la webcam, et son instant.
+    camera: Option<Pixmap>,
+    camera_t: f64,
     /// La taille voulue (celle du panneau au tour d'avant).
     pub taille: [u32; 2],
     /// Le temps d'une peinture (pour la barre d'état).
@@ -36,7 +43,7 @@ pub struct Vue {
 
 impl Vue {
     pub fn new() -> Self {
-        Self { texture: None, sortie: None, source: None, source_t: -1.0, cle: None, insere: None, insere_t: -1.0, taille: [960, 600], dernier_ms: 0.0 }
+        Self { texture: None, sortie: None, source: None, source_t: -1.0, cle: None, insere: None, insere_t: -1.0, camera: None, camera_t: -1.0, taille: [960, 600], dernier_ms: 0.0 }
     }
 
     pub fn oublier_source(&mut self) {
@@ -69,13 +76,23 @@ impl Vue {
                 self.insere_t = image.t;
             }
         }
+        let mut camera_la = false;
+        if !insere_la && let Some(image) = prise.image_webcam(t) {
+            camera_la = true;
+            if image.t != self.camera_t || self.camera.is_none() {
+                let taille = tiny_skia::IntSize::from_wh(image.largeur, image.hauteur)?;
+                self.camera = Pixmap::from_vec(image.rgba.clone(), taille);
+                self.camera_t = image.t;
+            }
+        }
         let source = self.source.as_ref()?;
         // La place du panneau, aux proportions de la vidéo.
         let (sl, sh) = (source.width() as f32, source.height() as f32);
         let k = (self.taille[0] as f32 / sl).min(self.taille[1] as f32 / sh);
         let (l, h) = (((sl * k) as u32).max(16), ((sh * k) as u32).max(9));
         let insere_cle = if insere_la { self.insere_t.to_bits() } else { u64::MAX };
-        let cle = (self.source_t.to_bits(), prise.version, l, h, sans_zoom, t.to_bits(), insere_cle);
+        let camera_cle = if camera_la { self.camera_t.to_bits() } else { u64::MAX };
+        let cle = (self.source_t.to_bits(), prise.version, l, h, sans_zoom, t.to_bits(), insere_cle, camera_cle);
         if self.cle != Some(cle) || self.texture.as_ref().is_none_or(|x| x.l != l || x.h != h) {
             let debut = std::time::Instant::now();
             let sortie = match &mut self.sortie {
@@ -101,7 +118,10 @@ impl Vue {
                         Compositeur::new(&voix, polices).peindre_calque(&mut sortie.as_mut(), t, tout, (0.0, 0.0, l as f64, h as f64), l as f64, h as f64);
                     }
                 }
-                None => Compositeur::new(&prise.montage, polices).peindre(&mut sortie.as_mut(), Some(source.as_ref()), t, tout, sans_zoom),
+                None => {
+                    let camera = self.camera.as_ref().filter(|_| camera_la).map(Pixmap::as_ref);
+                    Compositeur::new(&prise.montage, polices).peindre_avec_webcam(&mut sortie.as_mut(), Some(source.as_ref()), camera, t, tout, sans_zoom)
+                }
             }
             self.envoyer(gpu, l, h);
             self.cle = Some(cle);
@@ -118,6 +138,11 @@ impl Vue {
         {
             eprintln!("{chemin} : {e}");
         }
+    }
+
+    /// La taille de l'image de la webcam montrée (pour la placer à la souris).
+    pub fn taille_camera(&self) -> Option<(f64, f64)> {
+        self.camera.as_ref().map(|c| (c.width() as f64, c.height() as f64))
     }
 
     pub fn taille_image(&self) -> Option<[f32; 2]> {

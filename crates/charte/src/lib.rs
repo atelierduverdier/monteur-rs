@@ -40,6 +40,8 @@ pub const PISTE_ZOOM: u32 = 0x2979FF;
 pub const PISTE_ETIQUETTE: u32 = ACCENT;
 pub const PISTE_VOIX: u32 = SUCCES;
 pub const PISTE_MUSIQUE: u32 = 0x9575CD;
+/// La webcam en grand (25/11/2026) : le violet de la musique, qui n'a pas encore de piste.
+pub const PISTE_WEBCAM: u32 = PISTE_MUSIQUE;
 pub const PISTE_COUPE: u32 = ERREUR;
 pub const MARQUEUR: u32 = ALERTE;
 

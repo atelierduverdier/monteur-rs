@@ -167,6 +167,12 @@ impl<'a> Compositeur<'a> {
     /// Toute l'image d'un instant : `image` (celle de la vidéo à t) posée dans `cible`, puis le
     /// calque.
     pub fn peindre(&self, sortie: &mut PixmapMut, image: Option<PixmapRef>, t: f64, cible: R, sans_zoom: bool) {
+        self.peindre_avec_webcam(sortie, image, None, t, cible, sans_zoom);
+    }
+
+    /// Comme `peindre`, avec l'image de la webcam à t : elle se pose sur l'écran et ce qui l'accompagne (zoom,
+    /// clics, étiquettes), sous les sous-titres, qui continuent quand elle passe en grand.
+    pub fn peindre_avec_webcam(&self, sortie: &mut PixmapMut, image: Option<PixmapRef>, webcam: Option<PixmapRef>, t: f64, cible: R, sans_zoom: bool) {
         let m = self.montage;
         let largeur = image.map_or(0, |i| i.width()) as f64;
         let hauteur = image.map_or(0, |i| i.height()) as f64;
@@ -176,7 +182,18 @@ impl<'a> Compositeur<'a> {
         if let Some(image) = image {
             peindre_image(sortie, image, cible, source);
         }
-        self.peindre_calque(sortie, t, cible, source, largeur, hauteur);
+        let Some((w, camera)) = m.webcam.as_ref().filter(|w| w.montrer).zip(webcam) else {
+            self.peindre_calque(sortie, t, cible, source, largeur, hauteur);
+            return;
+        };
+        let c = Cadre { cible, source, largeur, hauteur, e: cible.h / 1080.0 };
+        let masque = masque_cible(sortie.width(), sortie.height(), cible);
+        let mut p = Peintre { sortie, masque: masque.as_ref() };
+        self.calque_ecran(&mut p, t, &c);
+        peindre_webcam(p.sortie, w, camera, t, cible);
+        if m.sous_titres_incrustes() {
+            self.sous_titres(&mut p, t, &c);
+        }
     }
 
     /// Ce qui se pose sur l'image : à peindre par-dessus l'image zoomée, ou sur un calque
@@ -193,21 +210,26 @@ impl<'a> Compositeur<'a> {
         let c = Cadre { cible, source, largeur, hauteur, e: cible.h / 1080.0 };
         let masque = masque_cible(sortie.width(), sortie.height(), cible);
         let mut p = Peintre { sortie, masque: masque.as_ref() };
-        let r = &self.montage.reglages;
-        if r.montrer_etiquettes && r.mettre_en_lumiere {
-            self.lumiere(&mut p, t, &c);
-        }
-        if r.montrer_clics {
-            self.clics(&mut p, t, &c);
-        }
-        if r.montrer_etiquettes {
-            self.etiquettes(&mut p, t, &c);
-        }
-        self.vitesse(&mut p, t, &c);
+        self.calque_ecran(&mut p, t, &c);
         // Mis à part dans un .srt, ils ne se peignent ni dans l'aperçu ni dans le rendu.
         if self.montage.sous_titres_incrustes() {
             self.sous_titres(&mut p, t, &c);
         }
+    }
+
+    /// Ce qui parle de l'écran filmé : la mise en lumière, les clics, les étiquettes, le passage accéléré.
+    fn calque_ecran(&self, p: &mut Peintre, t: f64, c: &Cadre) {
+        let r = &self.montage.reglages;
+        if r.montrer_etiquettes && r.mettre_en_lumiere {
+            self.lumiere(p, t, c);
+        }
+        if r.montrer_clics {
+            self.clics(p, t, c);
+        }
+        if r.montrer_etiquettes {
+            self.etiquettes(p, t, c);
+        }
+        self.vitesse(p, t, c);
     }
 
     /// Le réglage cliqué (ou la boîte qui s'ouvre) ressort : le reste s'assombrit, un cadre orange
@@ -412,6 +434,43 @@ impl<'a> Compositeur<'a> {
                 p.remplir(&lettres, couleur(BLANC, 1.0), FillRule::Winding, Transform::identity());
             }
         }
+    }
+}
+
+/// Où la webcam se pose dans `cible` à l'instant t (pixels de la sortie), pour l'aperçu qui la déplace à la souris.
+pub fn rect_webcam(w: &noyau::montage::Webcam, t: f64, cible: R, camera: (f64, f64)) -> R {
+    let ((x, y, l, h), _) = w.place(t, cible.l, cible.h, camera.0, camera.1);
+    R::new(cible.x + x, cible.y + y, l, h)
+}
+
+/// La webcam : une vignette aux coins arrondis, cernée d'un filet clair, qui s'élargit jusqu'à toute l'image en
+/// perdant ses coins et son filet.
+fn peindre_webcam(sortie: &mut PixmapMut, w: &noyau::montage::Webcam, camera: PixmapRef, t: f64, cible: R) {
+    let (cl, ch) = (camera.width() as f64, camera.height() as f64);
+    let ((x, y, l, h), source) = w.place(t, cible.l, cible.h, cl, ch);
+    let place = R::new(cible.x + x, cible.y + y, l, h);
+    let petite = 1.0 - w.grandeur(t);
+    let e = cible.h / 1080.0;
+    let rayon = 14.0 * e * petite;
+    let Some(forme) = chemin_arrondi(place, rayon) else { return };
+    // Une ombre douce sous la vignette : elle se détache d'un écran clair comme d'un sombre.
+    if petite > 0.0 {
+        for (marge, alpha) in [(6.0, 0.10), (3.0, 0.16)] {
+            if let Some(ombre) = chemin_arrondi(place.agrandi(marge * e), rayon + marge * e) {
+                sortie.fill_path(&ombre, &peinture(couleur(NOIR, alpha * petite)), FillRule::Winding, Transform::identity(), None);
+            }
+        }
+    }
+    let Some(mut masque) = Mask::new(sortie.width(), sortie.height()) else { return };
+    masque.fill_path(&forme, FillRule::Winding, true, Transform::identity());
+    let (sx, sy, sl, sh) = source;
+    let tr = Transform::from_translate(place.x as f32, place.y as f32)
+        .pre_scale((place.l / sl) as f32, (place.h / sh) as f32)
+        .pre_translate(-sx as f32, -sy as f32);
+    let peinture_image = PixmapPaint { quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
+    sortie.draw_pixmap(0, 0, camera, &peinture_image, tr, Some(&masque));
+    if petite > 0.0 {
+        sortie.stroke_path(&forme, &peinture(couleur(BLANC, 0.85 * petite)), &crayon((2.5 * e).max(1.0)), Transform::identity(), None);
     }
 }
 
