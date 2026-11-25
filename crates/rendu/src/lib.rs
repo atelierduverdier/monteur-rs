@@ -95,7 +95,6 @@ fn taille_webcam(l: i64, h: i64) -> (u32, u32) {
     (pair(l), pair(h))
 }
 
-/// L'expression ffmpeg vraie dans les passages à retirer.
 /// Le volume autour de chaque fondu : il descend avant la coupe et remonte après, le temps du fondu
 /// d'image. Posé avant le retrait des coupes : les temps sont ceux de la prise.
 fn enveloppe_son(fondus: &[(f64, f64, f64)]) -> String {
@@ -112,11 +111,28 @@ fn enveloppe_son(fondus: &[(f64, f64, f64)]) -> String {
             ]
         })
         .collect();
-    format!("asetnsamples=n=256:p=0,volume='{}':eval=frame,", termes.join("*"))
+    format!("asetnsamples=n=256:p=0,volume='{}':eval=frame,", en_arbre(&termes, '*'))
 }
 
+/// L'expression ffmpeg vraie dans les passages à retirer.
 pub fn expression_coupes(coupes: &[(f64, f64)]) -> Option<String> {
-    (!coupes.is_empty()).then(|| coupes.iter().map(|(a, b)| format!("between(t,{a:.4},{b:.4})")).collect::<Vec<_>>().join("+"))
+    let termes: Vec<String> = coupes.iter().map(|(a, b)| format!("between(t,{a:.4},{b:.4})")).collect();
+    (!termes.is_empty()).then(|| en_arbre(&termes, '+'))
+}
+
+/// Les termes liés deux à deux, entre parenthèses : ffmpeg refuse une chaîne de plus d'une
+/// centaine d'opérations à la file (« Error when evaluating the volume expression »), et 76 coupes
+/// fondues en font 152 (Christophe, 25/11/2026 : 40 min de prise, rendu en échec dès le départ).
+/// En arbre, la profondeur reste celle du logarithme : 1 000 termes passent.
+fn en_arbre(termes: &[String], op: char) -> String {
+    match termes {
+        [] => String::new(),
+        [seul] => seul.clone(),
+        _ => {
+            let (a, b) = termes.split_at(termes.len() / 2);
+            format!("({}{op}{})", en_arbre(a, op), en_arbre(b, op))
+        }
+    }
 }
 
 /// Une vidéo intercalée : son fichier et a-t-elle du son ?
@@ -634,13 +650,13 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
     let abandon = suivi.arret.load(Ordering::Relaxed);
     if abandon || resultat.is_err() || lu.is_err() || !code.success() {
         let _ = std::fs::remove_file(&partiel);
+        // L'encodeur qui refuse passe d'abord : sinon il ne restait que « l'encodeur s'est arrêté ».
+        if !code.success() {
+            return Err(Erreur(format!("L'encodage a échoué : {}", cause_ffmpeg(&bavard))));
+        }
         lu?;
         resultat?;
-        return Err(Erreur(if abandon {
-            "Rendu arrêté.".into()
-        } else {
-            format!("L'encodage a échoué : {}", bavard.lines().last().unwrap_or("ffmpeg"))
-        }));
+        return Err(Erreur("Rendu arrêté.".into()));
     }
     std::fs::rename(&partiel, sortie).map_err(|e| Erreur(format!("{} : {e}", sortie.display())))
 }
@@ -693,12 +709,30 @@ pub fn monter(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, su
     let fin = fin?;
     if !fin.status.success() {
         let _ = std::fs::remove_file(&partiel);
-        return Err(Erreur(format!("Vignette non collée : {}", String::from_utf8_lossy(&fin.stderr).lines().last().unwrap_or("ffmpeg"))));
+        return Err(Erreur(format!("Vignette non collée : {}", cause_ffmpeg(&String::from_utf8_lossy(&fin.stderr)))));
     }
     std::fs::rename(&partiel, &montee).map_err(|e| Erreur(e.to_string()))?;
     ecrire_srt(&noyau::chemin_derive(video, noyau::SUFFIXE_SRT), montage, noyau::DUREE_VIGNETTE, &mut compte)?;
     compte.push_str(&format!(" ; {} ({:.0} Mo)", nom(&montee), taille_mo(&montee)));
     Ok(compte + ".")
+}
+
+/// Ce que ffmpeg dit de son échec, en une ligne : sa première erreur et sa dernière, sans le
+/// « [filtre @ 0x…] » devant, chacune coupée à 160 caractères (une expression fait des milliers).
+pub fn cause_ffmpeg(bavard: &str) -> String {
+    let lisible = |l: &str| {
+        let l = match l.strip_prefix('[').and_then(|r| r.split_once("] ")) {
+            Some((tete, reste)) if tete.contains(" @ ") => reste,
+            _ => l,
+        };
+        if l.chars().count() > 160 { l.chars().take(159).collect::<String>() + "…" } else { l.to_string() }
+    };
+    let lignes: Vec<String> = bavard.lines().map(str::trim).filter(|l| !l.is_empty()).map(lisible).collect();
+    match lignes.as_slice() {
+        [] => "ffmpeg s'est arrêté sans rien dire".into(),
+        [seule] => seule.clone(),
+        [premiere, .., derniere] => format!("{premiere} — {derniere}"),
+    }
 }
 
 fn nom(p: &Path) -> String {
@@ -792,6 +826,29 @@ mod tests_volume {
         let pic = b.pcm.chunks_exact(2).map(|o| i16::from_le_bytes([o[0], o[1]]).unsigned_abs()).max().unwrap() as f64 / 32768.0;
         assert!(pic <= 10f64.powf(-1.0 / 20.0), "{pic}");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// 76 coupes fondues : 152 facteurs. À la file, ffmpeg les refusait et le rendu échouait dès
+    /// le départ (Christophe, 25/11/2026) ; en arbre, 400 coupes passent.
+    #[test]
+    fn longues_expressions_acceptees() {
+        let fondus: Vec<(f64, f64, f64)> = (0..400).map(|i| (i as f64 * 0.01 + 0.002, i as f64 * 0.01 + 0.004, 0.002)).collect();
+        let coupes: Vec<(f64, f64)> = fondus.iter().map(|&(a, b, _)| (a, b)).collect();
+        let graphe = format!("{}aselect='not({})',asetpts=N/SR/TB", enveloppe_son(&fondus), expression_coupes(&coupes).unwrap());
+        let o = Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=5", "-af", &graphe, "-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", cause_ffmpeg(&String::from_utf8_lossy(&o.stderr)));
+        assert_eq!(en_arbre(&["a".into(), "b".into(), "c".into()], '+'), "(a+(b+c))");
+    }
+
+    #[test]
+    fn cause_lisible() {
+        let bavard = format!("[Parsed_volume_1 @ 0x5564] Error when evaluating the volume expression '{}'\n[AVFilterGraph @ 0x55] Error initializing filters\nError : Cannot allocate memory\n", "x*".repeat(3000));
+        let c = cause_ffmpeg(&bavard);
+        assert!(c.starts_with("Error when evaluating the volume expression") && c.ends_with("— Error : Cannot allocate memory") && c.chars().count() < 250, "{c}");
+        assert_eq!(cause_ffmpeg(""), "ffmpeg s'est arrêté sans rien dire");
     }
 
     #[test]

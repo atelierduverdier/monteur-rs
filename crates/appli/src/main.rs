@@ -179,7 +179,8 @@ const RUBAN: f32 = 64.0;
 enum EtatTravail {
     Attente,
     EnCours,
-    Fini { reussi: bool, secondes: f64 },
+    /// `erreur` : la cause d'un échec, telle que le rendu l'a dite.
+    Fini { secondes: f64, erreur: Option<String> },
 }
 
 struct Travail {
@@ -730,8 +731,13 @@ impl Monteur {
                         let reste = self.rendu.as_ref().map_or(0.0, |r| r.debut.elapsed().as_secs_f64()) * (1.0 - f) / f.max(0.01);
                         ui.text_colored(charte::c(charte::CHIFFRE_SAISIE), format!("{:.0} % · reste {}", f * 100.0, chrono_court(reste)));
                     }
-                    EtatTravail::Fini { reussi: true, secondes } => ui.text_colored(charte::c(charte::SUCCES_TEXTE), format!("fini en {}", chrono_court(secondes))),
-                    EtatTravail::Fini { reussi: false, .. } => ui.text_colored(charte::c(charte::ERREUR), "échec ou arrêt"),
+                    EtatTravail::Fini { secondes, erreur: None } => ui.text_colored(charte::c(charte::SUCCES_TEXTE), format!("fini en {}", chrono_court(secondes))),
+                    // La cause en entier, pliée : la barre d'état la perdait au premier message suivant.
+                    EtatTravail::Fini { erreur: Some(ref e), .. } if e == "Rendu arrêté." => ui.text_colored(charte::c(charte::TEXT_2), "arrêté"),
+                    EtatTravail::Fini { erreur: Some(ref e), .. } => {
+                        let _plie = ui.push_text_wrap_pos(0.0);
+                        ui.text_colored(charte::c(charte::ERREUR), format!("échec : {e}"));
+                    }
                 }
             }
         });
@@ -2108,7 +2114,7 @@ impl Application for Monteur {
                 let duree = r.debut.elapsed().as_secs_f64();
                 let _ = r.fil.join();
                 if let Some(t) = self.file.iter_mut().find(|t| matches!(t.etat, EtatTravail::EnCours)) {
-                    t.etat = EtatTravail::Fini { reussi: fini.is_ok(), secondes: duree };
+                    t.etat = EtatTravail::Fini { secondes: duree, erreur: fini.as_ref().err().cloned() };
                 }
                 self.message = match fini {
                     Ok(compte) => format!("{compte} En {:.0} s.", duree),
