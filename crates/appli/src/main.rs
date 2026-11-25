@@ -198,6 +198,8 @@ struct RenduEnCours {
     fin: Receiver<Result<String, String>>,
     fil: std::thread::JoinHandle<()>,
     debut: std::time::Instant,
+    /// Quand les images ont commencé : le temps restant se compte de là, la mesure du son mise à part.
+    images: Option<std::time::Instant>,
 }
 
 struct Monteur {
@@ -654,7 +656,7 @@ impl Monteur {
         let fil = std::thread::spawn(move || {
             let _ = envoi.send(rendu::monter(&video, &montage, &voix, &pre, &s).map_err(|e| e.0));
         });
-        self.rendu = Some(RenduEnCours { nom, suivi, fin, fil, debut: std::time::Instant::now() });
+        self.rendu = Some(RenduEnCours { nom, suivi, fin, fil, debut: std::time::Instant::now(), images: None });
     }
 
     /// Préréglages à gauche, ce qu'ils font à droite, la file en bas.
@@ -735,8 +737,17 @@ impl Monteur {
                         let f = self.rendu.as_ref().map_or(0.0, |r| r.suivi.fraction());
                         ui.progress_bar(f as f32).size([200.0, 16.0]).build();
                         ui.same_line();
-                        let reste = self.rendu.as_ref().map_or(0.0, |r| r.debut.elapsed().as_secs_f64()) * (1.0 - f) / f.max(0.01);
-                        ui.text_colored(charte::c(charte::CHIFFRE_SAISIE), format!("{:.0} % · reste {}", f * 100.0, chrono_court(reste)));
+                        // Avant la première image, le son de toute la prise s'écoute (1 à 2 min pour 40 min) : un temps
+                        // restant tiré de 0 % grimpait sans fin (25/11/2026, « c'est normal que ça tourne comme ça ? »).
+                        let etape = match &self.rendu {
+                            Some(r) if r.suivi.vignette.load(std::sync::atomic::Ordering::Relaxed) => "100 % · vignette en tête…".to_string(),
+                            Some(r) => match r.images {
+                                Some(depuis) if f > 0.0 => format!("{:.0} % · reste {}", f * 100.0, chrono_court(depuis.elapsed().as_secs_f64() * (1.0 - f) / f.max(0.01))),
+                                _ => "mesure du son…".to_string(),
+                            },
+                            None => String::new(),
+                        };
+                        ui.text_colored(charte::c(charte::CHIFFRE_SAISIE), etape);
                     }
                     EtatTravail::Fini { secondes, erreur: None } => ui.text_colored(charte::c(charte::SUCCES_TEXTE), format!("fini en {}", chrono_court(secondes))),
                     // La cause en entier, pliée : la barre d'état la perdait au premier message suivant.
@@ -2133,6 +2144,12 @@ impl Application for Monteur {
                 self.ecrire_fiches();
                 self.a_changer = Some(self.dossier.chemin.clone());
             }
+        }
+        if let Some(r) = self.rendu.as_mut()
+            && r.images.is_none()
+            && r.suivi.faites.load(std::sync::atomic::Ordering::Relaxed) > 0
+        {
+            r.images = Some(std::time::Instant::now());
         }
         if let Some(fini) = self.rendu.as_ref().and_then(|r| r.fin.try_recv().ok()) {
             if let Some(r) = self.rendu.take() {
