@@ -296,6 +296,8 @@ struct Monteur {
     /// Une prise, un fichier projet ou VerdierCAM, choisis dans le dialogue de fichiers.
     prise_choisie: Option<Receiver<Option<PathBuf>>>,
     projet_choisi: Option<Receiver<Option<PathBuf>>>,
+    /// « Enregistrer le projet » : le fichier choisi dans la boîte, en fond.
+    projet_a_ecrire: Option<Receiver<Option<PathBuf>>>,
     verdiercam_choisi: Option<Receiver<Option<PathBuf>>>,
     /// Une vidéo qu'on importe, en fond : son chemin relatif, sa durée, par-dessus ?, l'instant.
     import: Option<Receiver<Result<Option<(String, f64, bool, f64)>, String>>>,
@@ -364,6 +366,22 @@ fn choisir_un_fichier(depart: &Path, titre: &str, (nom, extensions): Filtre) -> 
         d = d.add_filter(nom, extensions);
     }
     d.pick_file()
+}
+
+/// La boîte « Enregistrer » : le dossier et le nom, `nom` proposé.
+fn choisir_ou_ecrire(depart: &Path, titre: &str, nom: &str, (filtre, extensions): Filtre) -> Option<PathBuf> {
+    rfd::FileDialog::new().set_title(titre).set_directory(depart).set_file_name(nom).add_filter(filtre, extensions).save_file()
+}
+
+/// Le fichier choisi, avec son `.monteur` s'il a été oublié.
+fn avec_extension_projet(chemin: PathBuf) -> PathBuf {
+    if chemin.extension().is_some_and(|e| e.eq_ignore_ascii_case("monteur")) {
+        chemin
+    } else {
+        let mut nom = chemin.into_os_string();
+        nom.push(noyau::EXTENSION_PROJET);
+        PathBuf::from(nom)
+    }
 }
 
 /// Le temps laissé à VerdierCAM pour ouvrir sa fenêtre : le dialogue ne liste que celles qui existent.
@@ -505,6 +523,7 @@ impl Monteur {
             regarde: std::time::Instant::now(),
             prise_choisie: None,
             projet_choisi: None,
+            projet_a_ecrire: None,
             verdiercam_choisi: None,
             import: None,
             scenario: scenario::Scenario::depuis_l_environnement(),
@@ -555,8 +574,57 @@ impl Monteur {
         }
     }
 
+    /// ENREGISTRER LE PROJET : LE DOSSIER ET LE NOM SE CHOISISSENT (25/11/2026, Christophe : « je voudrais pouvoir
+    /// choisir le dossier et le nom du projet, là de base c'est le nom de la capture vidéo »). La première fois (ou
+    /// `demander`, « Enregistrer le projet sous… »), la boîte s'ouvre, le titre de la vidéo proposé ; ensuite le projet
+    /// s'écrit au même endroit sans rien demander. Le `<vidéo>.monteur` d'à côté de la prise s'écrit toujours aussi.
+    fn enregistrer_projet(&mut self, demander: bool) {
+        let Some(p) = &self.prise else { return };
+        let cle = noyau::videos::cle(&p.video);
+        let fiche = self.fiches.fiches.get(&cle).cloned().unwrap_or_default();
+        if !demander && !fiche.projet.is_empty() {
+            self.enregistrer_vers(Some(&PathBuf::from(&fiche.projet)));
+            return;
+        }
+        let deja = (!fiche.projet.is_empty()).then(|| PathBuf::from(&fiche.projet));
+        let depart = deja
+            .as_ref()
+            .and_then(|c| c.parent().map(Path::to_path_buf))
+            .or_else(|| self.fiches.projets.clone())
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(|| p.dossier().to_path_buf());
+        let titre = noyau::description::Description::lire(&noyau::chemin_derive(&p.video, noyau::SUFFIXE_DESCRIPTION)).map(|d| d.titre).unwrap_or_default();
+        let vignette = [fiche.titre.trim(), fiche.sous_titre.trim()].iter().filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join(" - ");
+        let nom = deja
+            .as_ref()
+            .and_then(|c| c.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .or_else(|| [titre, vignette].into_iter().find_map(|t| noyau::projets::nom_de_projet(&t.replace(['\\', ':', '*', '?', '"', '<', '>', '|'], " "))).map(|n| n + noyau::EXTENSION_PROJET))
+            .unwrap_or_else(|| noyau::chemin_derive(&p.video, noyau::EXTENSION_PROJET).file_name().unwrap_or_default().to_string_lossy().into_owned());
+        let (envoi, recu) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = envoi.send(choisir_ou_ecrire(&depart, "Enregistrer le projet", &nom, FILTRE_PROJETS));
+        });
+        self.projet_a_ecrire = Some(recu);
+        self.message = "Choisis le dossier et le nom du projet…".into();
+    }
+
+    /// Le fichier choisi dans la boîte : retenu pour cette prise, puis écrit.
+    fn projet_choisi_pour_ecrire(&mut self, chemin: PathBuf) {
+        let Some(p) = &self.prise else { return };
+        let chemin = avec_extension_projet(chemin);
+        self.fiches.fiches.entry(noyau::videos::cle(&p.video)).or_default().projet = chemin.to_string_lossy().into_owned();
+        self.fiches.projets = chemin.parent().map(Path::to_path_buf);
+        self.fiches_sales = true;
+        self.enregistrer_vers(Some(&chemin));
+    }
+
     /// Écrit tout : le montage, les fiches, et le fichier projet `<vidéo>.monteur`.
     fn enregistrer(&mut self) {
+        self.enregistrer_vers(None);
+    }
+
+    /// `aussi` : le fichier projet choisi, écrit en plus de celui d'à côté de la vidéo.
+    fn enregistrer_vers(&mut self, aussi: Option<&Path>) {
         if self.fiches_sales {
             self.ecrire_fiches();
         }
@@ -579,6 +647,12 @@ impl Monteur {
             Ok(()) => format!("Projet enregistré : {}", chemin.display()),
             Err(e) => format!("Projet non écrit : {e}"),
         };
+        if let Some(choisi) = aussi.filter(|c| *c != chemin) {
+            self.message = match projet.ecrire(choisi, env!("CARGO_PKG_VERSION")) {
+                Ok(()) => format!("Projet enregistré : {}", choisi.display()),
+                Err(e) => format!("Projet non écrit ({}) : {e}", choisi.display()),
+            };
+        }
     }
 
     /// Un projet tout neuf : la prise d'OBS ouverte y part ; sinon, un dossier vide où en ajouter.
@@ -1203,6 +1277,11 @@ impl Monteur {
         match noyau::projet::Projet::lire(&chemin) {
             Ok(projet) => match projet.retrouver_video(&chemin, &[self.copies.clone()]) {
                 Some(video) => {
+                    // Un projet rangé ailleurs, sous un autre nom : Ctrl+S y réécrit.
+                    if chemin != noyau::chemin_derive(&video, noyau::EXTENSION_PROJET) {
+                        self.fiches.fiches.entry(noyau::videos::cle(&video)).or_default().projet = chemin.to_string_lossy().into_owned();
+                        self.fiches_sales = true;
+                    }
                     let montage = etat::chemin_montage(&video);
                     if !montage.exists()
                         && let Some(mut m) = projet.montage()
@@ -1348,7 +1427,7 @@ impl Monteur {
             p.refaire();
         }
         if ctrl && ui.is_key_pressed(Key::S) {
-            self.enregistrer();
+            self.enregistrer_projet(maj);
         }
     }
 
@@ -2188,6 +2267,15 @@ impl Application for Monteur {
                 self.ouvrir_fichier_projet(chemin);
             }
         }
+        if let Some(r) = &self.projet_a_ecrire
+            && let Ok(choix) = r.try_recv()
+        {
+            self.projet_a_ecrire = None;
+            match choix {
+                Some(chemin) => self.projet_choisi_pour_ecrire(chemin),
+                None => self.message = "Projet non enregistré.".into(),
+            }
+        }
         if let Some(r) = &self.verdiercam_choisi
             && let Ok(choix) = r.try_recv()
         {
@@ -2323,7 +2411,10 @@ impl Application for Monteur {
                 }
                 ui.separator();
                 if ui.menu_item_enabled_selected_with_shortcut("Enregistrer le projet", "Ctrl+S", false, self.prise.is_some()) {
-                    self.enregistrer();
+                    self.enregistrer_projet(false);
+                }
+                if ui.menu_item_enabled_selected_with_shortcut("Enregistrer le projet sous…", "Ctrl+Maj+S", false, self.prise.is_some()) {
+                    self.enregistrer_projet(true);
                 }
                 if ui.menu_item("Rendre…") {
                     self.fenetre_rendre = true;

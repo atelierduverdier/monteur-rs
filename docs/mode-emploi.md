@@ -137,7 +137,8 @@ Les touches :
 | W | la webcam en grand à la tête, ou de retour en vignette |
 | Suppr, Échap | supprimer, désélectionner |
 | Ctrl+Z, Ctrl+Maj+Z | annuler, rétablir |
-| Ctrl+S | enregistrer le projet (le montage s'enregistre aussi tout seul) |
+| Ctrl+S | enregistrer le projet : la première fois, tu choisis son dossier et son nom (le titre de la vidéo est proposé), ensuite il s'écrit au même endroit ; le montage s'enregistre aussi tout seul |
+| Ctrl+Maj+S | enregistrer le projet sous un autre nom, ou ailleurs |
 
 ## Nettoyer la voix
 

@@ -34,6 +34,9 @@ pub struct Fiche {
     pub vignette_ns: i64,
     pub youtube_id: String,
     pub envoyee_le: String,
+    /// Le fichier projet choisi par « Enregistrer le projet » (dossier et nom) ; vide : pas encore choisi.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub projet: String,
     #[serde(flatten)]
     pub autres: Map<String, Value>,
 }
@@ -59,6 +62,7 @@ impl Fiche {
         texte("ligne3", &mut f.ligne3);
         texte("youtube_id", &mut f.youtube_id);
         texte("envoyee_le", &mut f.envoyee_le);
+        texte("projet", &mut f.projet);
         if let Some(Value::Number(n)) = d.remove("temps") {
             f.temps = n.as_f64().unwrap_or(0.0);
         }
@@ -160,5 +164,24 @@ impl Fiches {
             d.entry(k.clone()).or_insert_with(|| v.clone());
         }
         ecriture::ecrire_json(chemin, "fiches", &d)
+    }
+}
+
+#[cfg(test)]
+mod tests_projet {
+    use super::*;
+
+    /// Le fichier projet choisi se relit ; pas choisi, rien n'est écrit (les fiches restent comme avant).
+    #[test]
+    fn projet_choisi_relu() {
+        let mut d = Map::new();
+        d.insert("titre".into(), Value::String("VerdierCAM".into()));
+        d.insert("projet".into(), Value::String("/home/x/Projets/Présentation.monteur".into()));
+        let f = Fiche::depuis(d);
+        assert_eq!(f.projet, "/home/x/Projets/Présentation.monteur");
+        assert!(f.autres.is_empty());
+        let sans = serde_json::to_value(Fiche { titre: "a".into(), ..Fiche::default() }).unwrap();
+        assert!(sans.get("projet").is_none());
+        assert_eq!(serde_json::to_value(&f).unwrap()["projet"], "/home/x/Projets/Présentation.monteur");
     }
 }
