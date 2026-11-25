@@ -52,6 +52,12 @@ fn verrouille_ailleurs(chemin: &Path) -> bool {
     }
 }
 
+/// Le numéro du processus noté dans le verrou : celui du Monteur déjà ouvert, dont le deuxième fait venir la
+/// fenêtre. `None` sous Windows, où le fichier verrouillé ne se lit pas.
+pub fn numero(chemin: &Path) -> Option<u32> {
+    std::fs::read_to_string(chemin).ok()?.lines().next()?.trim().parse().ok()
+}
+
 impl Verrou {
     /// Prend le verrou ; une erreur en français si un Monteur est déjà ouvert. Un verrou abandonné
     /// (processus mort, ou un autre programme sous ce numéro) est repris.
@@ -132,6 +138,7 @@ mod tests {
         std::fs::write(&chemin, format!("{}\nsleep\natomman\n", enfant.id())).unwrap();
         let e = Verrou::prendre(&chemin).err().expect("déjà tenu");
         assert!(e.0.contains("déjà ouvert"));
+        assert_eq!(numero(&chemin), Some(enfant.id()), "le deuxième Monteur sait qui fait venir");
         // Le même numéro sous un autre nom de programme : abandonné, repris.
         std::fs::write(&chemin, format!("{}\npython3.14\natomman\n", enfant.id())).unwrap();
         assert!(Verrou::prendre(&chemin).is_ok());

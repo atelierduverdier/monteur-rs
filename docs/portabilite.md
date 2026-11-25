@@ -14,6 +14,7 @@ changer sous Linux : mêmes dossiers, même verrou que le Monteur 1, même dialo
 | `~/Vidéos`, `~/.local/share/…`, `XDG_DATA_HOME` lus à la main | `noyau::systeme` (crate `dirs`) : les mêmes chemins sous Linux, AppData et le dossier Vidéos sous Windows | `noyau::systeme` |
 | programmes lancés par `Command::new` | `noyau::systeme::commande` : celui posé à côté du Monteur d'abord (le paquet y mettra ffmpeg et whisper), sans fenêtre de console sous Windows | partout |
 | verrou lu dans `/proc` seul | en plus, le fichier reste verrouillé par le système (`File::try_lock`) : sous Windows c'est lui qui compte, et un plantage le lâche | `noyau::verrou` |
+| deuxième lancement : « déjà ouvert » sur la sortie d'erreur, invisible depuis le menu | la fenêtre du premier vient : un script confié à KWin sous KDE (la fenêtre du processus noté dans le verrou), `SetForegroundWindow` sous Windows (la fenêtre retrouvée à son titre) ; sinon une notification, ou une boîte sous Windows | `deja_ouvert.rs` |
 
 **VerdierCAM introuvable** : Filmer VerdierCAM ouvre le dialogue « Où est VerdierCAM ? » et note le
 choix dans `monteur/verdiercam`. Ordre de recherche : `MONTEUR_VERDIERCAM`, ce choix, à côté du

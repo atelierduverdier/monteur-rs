@@ -37,6 +37,9 @@ et où est VerdierCAM. Ce qui manque y a son bouton :
 
 On la rouvre par Aide › Ce qu'il faut.
 
+Un seul Monteur s'ouvre à la fois. Le relancer alors qu'il l'est déjà, sur un autre bureau virtuel ou réduit, fait
+venir sa fenêtre ; si le bureau ne le permet pas, une notification (une boîte sous Windows) dit qu'il est déjà ouvert.
+
 ## Filmer
 
 Deux boutons dans le ruban :

@@ -13,6 +13,7 @@
 #[cfg_attr(windows, path = "capture_windows.rs")]
 mod capture;
 mod aide;
+mod deja_ouvert;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod enregistreur;
 mod etat;
@@ -2285,11 +2286,13 @@ fn noter_les_plantages() {
 
 fn main() {
     noter_les_plantages();
-    // Un seul Monteur à la fois, le 1 ou le 2 (le même verrou).
-    let _verrou = match noyau::verrou::Verrou::prendre(&chemin_fiches().with_file_name("monteur.verrou")) {
+    // Un seul Monteur à la fois, le 1 ou le 2 (le même verrou). Le deuxième fait venir la fenêtre du premier, ou
+    // dit qu'il est ouvert : sans rien à l'écran, il passait pour planté (deja_ouvert.rs).
+    let chemin_verrou = chemin_fiches().with_file_name("monteur.verrou");
+    let _verrou = match noyau::verrou::Verrou::prendre(&chemin_verrou) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
+        Err(_) => {
+            deja_ouvert::signaler(noyau::verrou::numero(&chemin_verrou));
             std::process::exit(1);
         }
     };
@@ -2303,7 +2306,7 @@ fn main() {
     }
     graphisme.backends = graphisme.backends.with_env();
     let config = AppConfig {
-        window_title: "Monteur VerdierCAM".to_string(),
+        window_title: deja_ouvert::TITRE.to_string(),
         window_size: (1640.0, 1000.0),
         present_mode: wgpu::PresentMode::Fifo,
         clear_color: charte::c(charte::BG_CANVAS),
