@@ -24,8 +24,10 @@ fi
 # Le mode d'emploi en HTML, fait ici (python-markdown), emporté par l'assemblage.
 python3 "$DEPOT/outils/mode-emploi-html.py" "$DEPOT/docs/mode-emploi.md" "$DEPOT/target/mode-emploi.html" 2>/dev/null || true
 
+# Le conteneur construit hors ligne : les crates, et DeepFilterNet pris à son dépôt git, se chargent ici avant.
+cargo fetch --locked --manifest-path "$DEPOT/Cargo.toml"
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$DEPOT:/depot" -v "$CHAINE:/chaine:ro" -v "$SOURCES:/sources:ro" \
     -v "$(readlink -f "$CHAINE/ffmpeg"):$(readlink -f "$CHAINE/ffmpeg"):ro" \
-    -v "$HOME/.cargo/registry:/tmp/cargo/registry" \
+    -v "$HOME/.cargo/registry:/tmp/cargo/registry" -v "$HOME/.cargo/git:/tmp/cargo/git" \
     "$IMAGE" bash /depot/outils/linux/assembler.sh

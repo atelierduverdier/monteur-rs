@@ -37,6 +37,8 @@ pub struct Suivi {
     pub vignette: AtomicBool,
     /// La durée d'un court ou d'un GIF est atteinte : la lecture s'arrête, le rendu n'est pas perdu.
     pub assez: AtomicBool,
+    /// Avant les images : DeepFilterNet débruite la voix.
+    pub debruitage: AtomicBool,
 }
 
 impl Suivi {
@@ -184,13 +186,14 @@ fn graphe_son(retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[(f64, f64, f64
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], fondus: &[(f64, f64, f64)], volume: Option<&str>, pre: &Prereglage) -> Vec<String> {
+/// `voix` : le son de la prise, ou son WAV débruité (mêmes instants).
+pub fn commande_encodage(voix: &Path, sortie: &Path, l: u32, h: u32, ips: &str, retire: &[(f64, f64)], son: bool, clips: &[ClipSon], fondus: &[(f64, f64, f64)], volume: Option<&str>, pre: &Prereglage) -> Vec<String> {
     let mut cmd = vec![
         s("ffmpeg"), s("-v"), s("error"), s("-y"), s("-nostats"), s("-f"), s("rawvideo"), s("-pix_fmt"), s("rgba"),
         s("-s"), format!("{l}x{h}"), s("-r"), s(ips), s("-i"), s("-"),
     ];
     if son {
-        cmd.extend([s("-i"), video.to_string_lossy().into_owned()]);
+        cmd.extend([s("-i"), voix.to_string_lossy().into_owned()]);
         for c in clips.iter().filter(|c| c.son) {
             cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
         }
@@ -199,7 +202,8 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
             None => (graphe_son(retire, clips, fondus), "[a]"),
         };
         cmd.extend([s("-filter_complex"), graphe, s("-map"), s("0:v"), s("-map"), s(sortie_son)]);
-        cmd.extend([s("-c:a"), s("aac"), s("-b:a"), s("192k"), s("-shortest")]);
+        // En stéréo : le WAV débruité est mono, et une voix mono passe à l'identique dans les deux canaux.
+        cmd.extend([s("-ac"), s("2"), s("-c:a"), s("aac"), s("-b:a"), s("192k"), s("-shortest")]);
     } else {
         cmd.extend([s("-map"), s("0:v")]);
     }
@@ -214,13 +218,13 @@ pub fn commande_encodage(video: &Path, sortie: &Path, l: u32, h: u32, ips: &str,
 }
 
 /// La chaîne de la voix pour tout le son monté : nettoyage, puis niveau mesuré (premier passage de
-/// `loudnorm`, repris au second). `None` : rien à appliquer.
-fn filtre_son(video: &Path, retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[(f64, f64, f64)], voix: &Voix) -> Option<String> {
-    let nettoyage = voix.filtres();
+/// `loudnorm`, repris au second). `None` : rien à appliquer. `debruite` : `son` est le WAV de DeepFilterNet.
+fn filtre_son(son: &Path, debruite: bool, retire: &[(f64, f64)], clips: &[ClipSon], fondus: &[(f64, f64, f64)], voix: &Voix) -> Option<String> {
+    let nettoyage = voix.filtres(debruite);
     if !voix.niveau {
         return nettoyage;
     }
-    let mut cmd = vec![s("-hide_banner"), s("-nostats"), s("-f"), s("lavfi"), s("-i"), s("nullsrc=s=2x2:d=0.04"), s("-i"), video.to_string_lossy().into_owned()];
+    let mut cmd = vec![s("-hide_banner"), s("-nostats"), s("-f"), s("lavfi"), s("-i"), s("nullsrc=s=2x2:d=0.04"), s("-i"), son.to_string_lossy().into_owned()];
     for c in clips.iter().filter(|c| c.son) {
         cmd.extend([s("-i"), c.chemin.to_string_lossy().into_owned()]);
     }
@@ -272,30 +276,170 @@ fn ffmpeg_extrait(video: &Path, debut: f64, duree: f64, filtre: Option<&str>, so
     c.args(sortie).stdin(Stdio::null()).output().ok()
 }
 
-/// Le passage tel quel, puis nettoyé comme au rendu.
+/// Un WAV mono en flottants : l'en-tête d'abord, ses tailles réécrites à la fin.
+fn entete_wav(echantillons: u32) -> [u8; 44] {
+    let octets = echantillons.saturating_mul(4);
+    let mut e = [0u8; 44];
+    let mut i = 0;
+    let mut mettre = |b: &[u8]| {
+        e[i..i + b.len()].copy_from_slice(b);
+        i += b.len();
+    };
+    mettre(b"RIFF");
+    mettre(&octets.saturating_add(36).to_le_bytes());
+    mettre(b"WAVEfmt ");
+    mettre(&16u32.to_le_bytes());
+    mettre(&3u16.to_le_bytes()); // flottants IEEE
+    mettre(&1u16.to_le_bytes());
+    mettre(&debruitage::TAUX.to_le_bytes());
+    mettre(&(debruitage::TAUX * 4).to_le_bytes());
+    mettre(&4u16.to_le_bytes());
+    mettre(&32u16.to_le_bytes());
+    mettre(b"data");
+    mettre(&octets.to_le_bytes());
+    e
+}
+
+/// Le son de la prise (ou d'un passage `(début, durée)`) débruité par DeepFilterNet, écrit dans `wav`
+/// en mono à 48 kHz, calé sur la prise. Les deux canaux sont moyennés : une voix mono enregistrée en
+/// stéréo garde son niveau. Une prise de 40 min pèse 450 Mo de WAV, le temps du rendu.
+pub fn debruiter_son(video: &Path, passage: Option<(f64, f64)>, force: f64, wav: &Path, suivi: &Suivi) -> Result<(), Erreur> {
+    let rate = |e: String| Erreur(format!("Débruitage : {e}"));
+    let mut d = debruitage::Debruiteur::new(debruitage::attenuation_db(force)).map_err(rate)?;
+    let mut c = noyau::systeme::commande("ffmpeg");
+    c.args(["-v", "error", "-nostdin"]);
+    if let Some((debut, duree)) = passage {
+        c.args(["-ss", &format!("{debut:.3}"), "-t", &format!("{duree:.3}")]);
+    }
+    c.arg("-i").arg(video).args(["-vn", "-ac", "2", "-ar", &debruitage::TAUX.to_string(), "-f", "f32le", "-"]);
+    let mut lecteur = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| rate(format!("ffmpeg : {e}")))?;
+    let mut flux = lecteur.stdout.take().expect("sortie de ffmpeg");
+    let erreurs = lecteur.stderr.take();
+    let erreurs = std::thread::spawn(move || {
+        let mut t = String::new();
+        if let Some(mut e) = erreurs {
+            let _ = e.read_to_string(&mut t);
+        }
+        t
+    });
+    let fichier = std::fs::File::create(wav).map_err(|e| rate(format!("{} : {e}", wav.display())))?;
+    let mut ecrit = std::io::BufWriter::new(fichier);
+    let mut resultat = ecrit.write_all(&entete_wav(0)).map_err(|e| rate(e.to_string()));
+    // Une seconde de son à la fois : 384 ko lus, 192 ko écrits.
+    let mut brut = vec![0u8; debruitage::TAUX as usize * 8];
+    let (mut plein, mut total) = (0usize, 0u64);
+    let mut net = Vec::new();
+    let ecrire = |net: &mut Vec<f32>, ecrit: &mut std::io::BufWriter<std::fs::File>| -> std::io::Result<()> {
+        for x in net.drain(..) {
+            ecrit.write_all(&x.to_le_bytes())?;
+        }
+        Ok(())
+    };
+    while resultat.is_ok() {
+        if suivi.arret.load(Ordering::Relaxed) {
+            resultat = Err(Erreur("Rendu arrêté.".into()));
+            break;
+        }
+        let lu = match flux.read(&mut brut[plein..]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                resultat = Err(rate(e.to_string()));
+                break;
+            }
+        };
+        plein += lu;
+        let entiers = plein / 8 * 8;
+        let mono: Vec<f32> = brut[..entiers]
+            .chunks_exact(8)
+            .map(|o| (f32::from_le_bytes([o[0], o[1], o[2], o[3]]) + f32::from_le_bytes([o[4], o[5], o[6], o[7]])) / 2.0)
+            .collect();
+        brut.copy_within(entiers..plein, 0);
+        plein -= entiers;
+        total += mono.len() as u64;
+        resultat = d.pousser(&mono, &mut net).map_err(rate).and_then(|()| ecrire(&mut net, &mut ecrit).map_err(|e| rate(e.to_string())));
+    }
+    drop(flux);
+    if resultat.is_err() {
+        let _ = lecteur.kill();
+    }
+    let code = lecteur.wait().map_err(|e| rate(e.to_string()))?;
+    let bavard = erreurs.join().unwrap_or_default();
+    if resultat.is_ok() && !code.success() {
+        resultat = Err(rate(format!("lecture du son : {}", cause_ffmpeg(&bavard))));
+    }
+    if resultat.is_ok() && total == 0 {
+        resultat = Err(rate("la prise n'a pas de son".into()));
+    }
+    let resultat = resultat.and_then(|()| {
+        d.finir(&mut net).map_err(rate)?;
+        ecrire(&mut net, &mut ecrit).map_err(|e| rate(e.to_string()))?;
+        let mut fichier = ecrit.into_inner().map_err(|e| rate(e.to_string()))?;
+        use std::io::Seek;
+        fichier.seek(std::io::SeekFrom::Start(0)).and_then(|_| fichier.write_all(&entete_wav(total.min(u32::MAX as u64 / 4 - 9) as u32))).map_err(|e| rate(e.to_string()))
+    });
+    if resultat.is_err() {
+        let _ = std::fs::remove_file(wav);
+    }
+    resultat
+}
+
+/// Un fichier de passage, effacé quoi qu'il arrive.
+struct Efface(PathBuf);
+
+impl Drop for Efface {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Le WAV débruité d'un rendu, à côté de son `.partiel`.
+fn chemin_voix_debruitee(partiel: &Path) -> PathBuf {
+    let mut nom = partiel.as_os_str().to_owned();
+    nom.push(".voix.wav");
+    PathBuf::from(nom)
+}
+
+/// Le passage tel quel, puis nettoyé comme au rendu : débruité par DeepFilterNet dans un WAV jetable,
+/// ou par `afftdn` en secours.
 pub fn avant_apres(video: &Path, debut: f64, duree: f64, voix: &Voix) -> Option<(Extrait, Extrait)> {
+    let wav = std::env::temp_dir().join(format!("monteur-voix-{}-{}.wav", std::process::id(), PASSAGES.fetch_add(1, Ordering::Relaxed)));
+    let debruite = voix.bruit && debruiter_son(video, Some((debut, duree)), voix.bruit_force, &wav, &Suivi::default()).is_ok();
+    let r = avant_apres_depuis(video, debut, duree, voix, debruite.then_some(wav.as_path()));
+    if debruite {
+        let _ = std::fs::remove_file(&wav);
+    }
+    r
+}
+
+/// Pour que deux écoutes calculées en même temps n'écrivent pas le même WAV.
+static PASSAGES: AtomicU32 = AtomicU32::new(0);
+
+/// `debruite` : le passage déjà débruité, qui commence à 0.
+fn avant_apres_depuis(video: &Path, debut: f64, duree: f64, voix: &Voix, debruite: Option<&Path>) -> Option<(Extrait, Extrait)> {
     const PCM: [&str; 9] = ["-ac", "2", "-ar", "48000", "-f", "s16le", "-c:a", "pcm_s16le", "-"];
     const NUL: [&str; 3] = ["-f", "null", "-"];
-    let mesure = |f: &str| ffmpeg_extrait(video, debut, duree, Some(f), &NUL).map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
+    let (source, depart) = debruite.map_or((video, debut), |w| (w, 0.0));
+    let mesure = |v: &Path, d: f64, f: &str| ffmpeg_extrait(v, d, duree, Some(f), &NUL).map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
     let vers_cible = format!("loudnorm={}:print_format=json", voix.cible());
-    let brut = mesure(&vers_cible)?;
-    let nettoyage = voix.filtres();
+    let brut = mesure(video, debut, &vers_cible)?;
+    let nettoyage = voix.filtres(debruite.is_some());
     let avant_niveau = nettoyage.as_ref().map(|f| format!("{f},")).unwrap_or_default();
     let filtre = if voix.niveau {
-        let m = mesure(&format!("{avant_niveau}{vers_cible}"))?;
+        let m = mesure(source, depart, &format!("{avant_niveau}{vers_cible}"))?;
         filtre_depuis_mesure(&m, voix).map(|n| format!("{avant_niveau}{n}")).or(nettoyage)
     } else {
         nettoyage
     };
-    let lire = |f: Option<&str>| ffmpeg_extrait(video, debut, duree, f, &PCM).filter(|o| o.status.success()).map(|o| o.stdout);
-    let (pcm_avant, pcm_apres) = (lire(None)?, lire(filtre.as_deref())?);
+    let lire = |v: &Path, d: f64, f: Option<&str>| ffmpeg_extrait(v, d, duree, f, &PCM).filter(|o| o.status.success()).map(|o| o.stdout);
+    let (pcm_avant, pcm_apres) = (lire(video, debut, None)?, lire(source, depart, filtre.as_deref())?);
     // Mesurée sur ce qui sort vraiment, pas sur la cible.
     let lufs = |f: Option<&str>| {
         let texte = match f {
             Some(f) => format!("{f},{}", vers_cible),
             None => vers_cible.clone(),
         };
-        mesure(&texte).and_then(|m| lire_mesure(&m)).map(|m| m[0])
+        mesure(source, depart, &texte).and_then(|m| lire_mesure(&m)).map(|m| m[0])
     };
     Some((Extrait { pcm: pcm_avant, lufs: lire_mesure(&brut).map(|m| m[0]) }, Extrait { pcm: pcm_apres, lufs: lufs(filtre.as_deref()) }))
 }
@@ -575,8 +719,25 @@ pub fn rendre(video: &Path, montage: &Montage, voix: &Voix, pre: &Prereglage, so
     let cam = webcam.as_ref().map_or((0, 0), |w| (w.1, w.2));
     let son = infos.son && pre.son;
     let fondus = montage.fondus();
-    let volume = if son { filtre_son(video, &retire, &clips, &fondus, voix) } else { None };
-    let mut encodeur = lancer(&commande_encodage(video, &partiel, lo, ho, &ips_texte, &retire, son, &clips, &fondus, volume.as_deref(), pre), true)?;
+    // La voix débruitée par DeepFilterNet, à côté du rendu, le temps du rendu ; s'il échoue, afftdn le
+    // remplace dans la chaîne.
+    let wav = Efface(chemin_voix_debruitee(&partiel));
+    let debruite = son && voix.bruit && {
+        suivi.debruitage.store(true, Ordering::Relaxed);
+        let r = debruiter_son(video, None, voix.bruit_force, &wav.0, suivi);
+        suivi.debruitage.store(false, Ordering::Relaxed);
+        match r {
+            Ok(()) => true,
+            Err(e) if suivi.arret.load(Ordering::Relaxed) => return Err(e),
+            Err(e) => {
+                eprintln!("{} : afftdn en secours", e.0);
+                false
+            }
+        }
+    };
+    let source_son = if debruite { wav.0.as_path() } else { video };
+    let volume = if son { filtre_son(source_son, debruite, &retire, &clips, &fondus, voix) } else { None };
+    let mut encodeur = lancer(&commande_encodage(source_son, &partiel, lo, ho, &ips_texte, &retire, son, &clips, &fondus, volume.as_deref(), pre), true)?;
     let mut entree = encodeur.stdin.take().expect("entrée de l'encodeur");
     let erreurs = encodeur.stderr.take();
     // Lue à part : ffmpeg bloquerait s'il remplissait sa sortie d'erreur.
@@ -818,7 +979,8 @@ mod tests_volume {
             .status()
             .unwrap();
         assert!(fait.success());
-        let (a, b) = avant_apres(&v, 1.0, 10.0, &Voix::default()).unwrap();
+        // Un son pur : DeepFilterNet le prendrait pour du bruit, la chaîne sans lui se mesure ici.
+        let (a, b) = avant_apres(&v, 1.0, 10.0, &Voix { bruit: false, ..Voix::default() }).unwrap();
         let attendu = 48000 * 2 * 2 * 10;
         assert!(a.pcm.len().abs_diff(attendu) < 4096 && b.pcm.len().abs_diff(attendu) < 4096, "{} {}", a.pcm.len(), b.pcm.len());
         let (la, lb) = (a.lufs.unwrap(), b.lufs.unwrap());
@@ -826,6 +988,85 @@ mod tests_volume {
         let pic = b.pcm.chunks_exact(2).map(|o| i16::from_le_bytes([o[0], o[1]]).unsigned_abs()).max().unwrap() as f64 / 32768.0;
         assert!(pic <= 10f64.powf(-1.0 / 20.0), "{pic}");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Un souffle de 3 s : DeepFilterNet en rend un WAV lisible, aussi long, bien plus calme ; un
+    /// passage, lui, commence à son début.
+    #[test]
+    fn souffle_debruite() {
+        let d = std::env::temp_dir().join(format!("debruite-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (v, wav) = (d.join("souffle.mp4"), d.join("souffle.wav"));
+        let fait = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=c=pink:r=44100:a=0.05:d=3:seed=42", "-ac", "2", "-c:a", "aac"])
+            .arg(&v)
+            .status()
+            .unwrap();
+        assert!(fait.success());
+        let niveau = |f: &Path| {
+            let o = Command::new("ffmpeg").args(["-hide_banner", "-i"]).arg(f).args(["-af", "volumedetect", "-f", "null", "-"]).output().unwrap();
+            let t = String::from_utf8_lossy(&o.stderr).into_owned();
+            let l = t.lines().find(|l| l.contains("mean_volume")).unwrap_or_else(|| panic!("{t}"));
+            l.split(':').nth(1).unwrap().trim().trim_end_matches(" dB").parse::<f64>().unwrap()
+        };
+        let duree = |f: &Path| {
+            let o = Command::new("ffprobe").args(["-v", "error", "-show_entries", "stream=duration,sample_rate,channels", "-of", "csv=p=0"]).arg(f).output().unwrap();
+            let t = String::from_utf8_lossy(&o.stdout).into_owned();
+            let c: Vec<&str> = t.trim().split(',').collect();
+            assert_eq!(&c[..2], ["48000", "1"], "{t}");
+            c[2].parse::<f64>().unwrap()
+        };
+        debruiter_son(&v, None, 1.0, &wav, &Suivi::default()).unwrap();
+        assert!((duree(&wav) - 3.0).abs() < 0.03, "{}", duree(&wav));
+        let (avant, apres) = (niveau(&v), niveau(&wav));
+        assert!(apres < avant - 20.0, "{avant} → {apres} dB");
+        // À 6 dB au plus, le souffle baisse à peine.
+        debruiter_son(&v, Some((1.0, 1.5)), 0.0, &wav, &Suivi::default()).unwrap();
+        assert!((duree(&wav) - 1.5).abs() < 0.03, "{}", duree(&wav));
+        let faible = niveau(&wav);
+        assert!(faible > avant - 8.0, "{avant} → {faible} dB");
+        // Arrêté en route : pas de WAV laissé.
+        let arret = Suivi::default();
+        arret.arret.store(true, Ordering::Relaxed);
+        assert!(debruiter_son(&v, None, 1.0, &wav, &arret).is_err() && !wav.exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Le rendu d'une prise bruitée, voix débruitée : la sortie est en stéréo, calme, et le WAV de
+    /// passage a disparu.
+    #[test]
+    fn rendu_debruite() {
+        let d = std::env::temp_dir().join(format!("rendu-debruite-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (v, s) = (d.join("prise.mp4"), d.join("sortie.mp4"));
+        let fait = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=gray:s=64x48:r=30:d=3", "-f", "lavfi", "-i", "anoisesrc=c=pink:r=48000:a=0.05:d=3:seed=42"])
+            .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+            .arg(&v)
+            .status()
+            .unwrap();
+        assert!(fait.success());
+        let m = Montage { duree: 3.0, largeur: 64, hauteur: 48, ..Montage::default() };
+        let voix = Voix { bruit: true, bruit_force: 1.0, ..Voix::aucune() };
+        rendre(&v, &m, &voix, &noyau::prereglages::PREREGLAGES[0], &s, &Suivi::default()).unwrap();
+        let o = Command::new("ffprobe").args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=channels", "-of", "csv=p=0"]).arg(&s).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "2");
+        let o = Command::new("ffmpeg").args(["-hide_banner", "-i"]).arg(&s).args(["-af", "volumedetect", "-f", "null", "-"]).output().unwrap();
+        let t = String::from_utf8_lossy(&o.stderr).into_owned();
+        let moyen: f64 = t.lines().find(|l| l.contains("mean_volume")).and_then(|l| l.split(':').nth(1)?.trim().trim_end_matches(" dB").parse().ok()).unwrap_or(-91.0);
+        assert!(moyen < -45.0, "{moyen} dB");
+        let restes: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(restes.len(), 2, "{restes:?}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn entete_wav_lisible() {
+        let e = entete_wav(48_000);
+        assert_eq!(&e[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes([e[40], e[41], e[42], e[43]]), 192_000);
+        assert_eq!(u32::from_le_bytes([e[4], e[5], e[6], e[7]]), 192_036);
+        assert_eq!(chemin_voix_debruitee(Path::new("/a/b.partiel.mp4")), Path::new("/a/b.partiel.mp4.voix.wav"));
     }
 
     /// 76 coupes fondues : 152 facteurs. À la file, ffmpeg les refusait et le rendu échouait dès

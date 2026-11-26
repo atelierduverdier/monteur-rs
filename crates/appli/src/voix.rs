@@ -194,9 +194,12 @@ impl FenetreVoix {
             // Une seule largeur : calculée à chaque carte, la seconde colonne sortait plus étroite.
             let l = (ui.content_region_avail()[0] - 8.0) / 2.0;
             let r = &mut self.reglages;
-            change |= carte(ui, l, "c1", "Réduire le bruit", "Souffle du PC et ventilation.", &mut r.bruit, |ui| {
+            // La force dit l'atténuation en dB : à fond, sans limite, la voix peut sonner « sous l'eau ».
+            change |= carte(ui, l, "c1", "Réduire le bruit", "Atelier, ventilation, souffle (DeepFilterNet).", &mut r.bruit, |ui| {
                 let mut p = r.bruit_force * 100.0;
-                let c = curseur(ui, "Force##bruit", &mut p, 0.0, 100.0, "%.0f %%");
+                let db = debruitage::attenuation_db(r.bruit_force);
+                let format = if db >= 100.0 { "%.0f %% · sans limite".to_string() } else { format!("%.0f %% · jusqu'à −{db:.0} dB") };
+                let c = curseur(ui, "Force##bruit", &mut p, 0.0, 100.0, &format);
                 r.bruit_force = p / 100.0;
                 c
             });

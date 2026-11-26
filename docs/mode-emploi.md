@@ -142,9 +142,16 @@ Les touches :
 
 ## Nettoyer la voix
 
-Le bouton **Voix** : coupe du grave, bruit de fond, sifflantes, compresseur, puis niveau égal (comme YouTube
+Le bouton **Voix** : bruit de fond, coupe du grave, sifflantes, compresseur, puis niveau égal (comme YouTube
 l'attend). « Écouter avant » et « Écouter après » font entendre dix secondes autour de la tête. Les réglages valent
 pour toutes les prises.
+
+Le bruit de fond (ventilation, ronflement de l'atelier, souffle) est retiré par **DeepFilterNet**, un petit réseau
+qui reconnaît la voix : entre les phrases, le bruit disparaît. Il est dans le Monteur, rien à télécharger, et
+travaille sur le processeur : un peu plus d'une minute pour 40 min de prise, au début du rendu (la file
+d'attente dit « débruitage de la voix… »). La **force** dit jusqu'où le bruit baisse : à 50 %, 33 dB ; à 100 %,
+sans limite, comme l'essai du 26/11. À fond, la voix peut sonner « sous l'eau » : baisse la force jusqu'à ce
+qu'elle retrouve son timbre, à l'oreille, avec « Écouter après ».
 
 ## La vignette
 

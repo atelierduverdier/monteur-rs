@@ -20,3 +20,20 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # dear-app ne permet pas de nommer la fenêtre : une ligne ajoutée dans src/runtime/state.rs.
 [patch.crates-io]
 dear-app = { path = "vendor/dear-app" }
+
+# DeepFilterNet (crate debruitage) : sans optimisation, tract 0.21.4 échoue à préparer le modèle (« running pass
+# codegen ») et calculerait cinq fois moins vite. Ses crates sont optimisés même en debug.
+[profile.dev.package]
+deep_filter = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-core = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-linalg = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-data = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-hir = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-onnx = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-nnef = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-pulse = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-onnx-opl = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+tract-pulse-opl = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+rustfft = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+realfft = { opt-level = 3, debug-assertions = false, overflow-checks = false }
+ndarray = { opt-level = 3, debug-assertions = false, overflow-checks = false }

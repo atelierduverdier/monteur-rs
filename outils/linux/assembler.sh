@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DANS LE CONTENEUR monteur-construction-linux (outils/construire-linux.sh le lance) : whisper-cli, le Monteur, puis
 # l'AppImage. Montés : /depot (le dépôt), /chaine (FFmpeg Linux de BtbN), /sources (les sources de whisper.cpp),
-# /tmp/cargo/registry (le registre des crates du poste : rien à retélécharger).
+# /tmp/cargo/registry et /tmp/cargo/git (les crates du poste, et DeepFilterNet pris à son dépôt : rien à retélécharger).
 set -euo pipefail
 DEPOT=/depot
 CONSTRUCTION="$DEPOT/target/linux"
@@ -58,6 +58,7 @@ cp "$DEPOT/LICENSE" "$APPDIR/usr/share/monteur-verdiercam/licences/Monteur-Verdi
 cp "$DEPOT/MARQUE.md" "$APPDIR/usr/share/monteur-verdiercam/licences/Marque-VerdierCAM.txt"
 cp "$FFMPEG/LICENSE.txt" "$APPDIR/usr/share/monteur-verdiercam/licences/FFmpeg.txt"
 cp "$WHISPER_SRC/LICENSE" "$APPDIR/usr/share/monteur-verdiercam/licences/whisper.cpp.txt"
+cp "$DEPOT/ressources/DeepFilterNet-MIT.txt" "$APPDIR/usr/share/monteur-verdiercam/licences/DeepFilterNet.txt"
 cp "$DEPOT/ressources/polices/OFL-Inter.txt" "$DEPOT/ressources/polices/OFL-JetBrainsMono.txt" "$APPDIR/usr/share/monteur-verdiercam/licences/"
 [ -f "$DEPOT/target/mode-emploi.html" ] && cp "$DEPOT/target/mode-emploi.html" "$APPDIR/usr/share/monteur-verdiercam/Mode d'emploi.html"
 cp "$DEPOT/ressources/fr.atelierduverdier.Monteur2.svg" "$APPDIR/fr.atelierduverdier.Monteur2.svg"

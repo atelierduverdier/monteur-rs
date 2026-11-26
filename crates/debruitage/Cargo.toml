@@ -1,0 +1,18 @@
+[package]
+name = "debruitage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Débruiter la voix avec DeepFilterNet 3 (libDF, moteur tract), modèle inclus dans le programme"
+
+[dependencies]
+# libDF n'est publié sur crates.io qu'en 0.2 (2022) : la 0.5, avec tract et le modèle DeepFilterNet3, se prend au dépôt,
+# épinglée à une révision. Code et poids sous MIT/Apache-2.0.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "7b14b895fe", default-features = false, features = ["tract", "default-model"] }
+ndarray = "0.15"
+# libDF suit l'API de tract 0.21.4 ; les 0.21 suivantes l'ont changée (symbol_table devenu symbols).
+tract-core = "=0.21.4"
+tract-onnx = "=0.21.4"
+tract-pulse = "=0.21.4"
+tract-hir = "=0.21.4"

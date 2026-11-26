@@ -1,5 +1,9 @@
 //! Le nettoyage de la voix : mêmes réglages pour toutes les prises, gardés à côté des fiches. La
 //! chaîne de filtres ffmpeg sert au rendu comme à l'écoute avant/après.
+//!
+//! Le bruit, lui, s'enlève avant ffmpeg : DeepFilterNet 3 (crate `debruitage`) débruite le son de la
+//! prise, puis la chaîne coupe le grave, adoucit les « s », égalise et règle le niveau. Si DeepFilterNet
+//! échoue, le filtre `afftdn` de ffmpeg reprend sa place dans la chaîne, en secours.
 
 use std::path::Path;
 
@@ -9,7 +13,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Voix {
     pub bruit: bool,
-    /// 0 à 1.
+    /// 0 à 1 : l'atténuation maximale du bruit par DeepFilterNet (`debruitage::attenuation_db`), ou
+    /// la force d'`afftdn` en secours.
     pub bruit_force: f64,
     pub grave: bool,
     pub grave_hz: f64,
@@ -59,14 +64,15 @@ impl Voix {
         crate::ecriture::ecrire_atomique(chemin, "voix", texte.as_bytes())
     }
 
-    /// Les filtres avant le réglage du niveau : le bruit d'abord, pour que le compresseur ne le
-    /// fasse pas remonter. `None` : rien à faire.
-    pub fn filtres(&self) -> Option<String> {
+    /// Les filtres avant le réglage du niveau, le bruit avant le compresseur, pour qu'il ne le fasse
+    /// pas remonter. `debruite` : DeepFilterNet est déjà passé, `afftdn` n'a rien à faire ; sinon, il
+    /// le remplace. `None` : rien à faire.
+    pub fn filtres(&self, debruite: bool) -> Option<String> {
         let mut f = Vec::new();
         if self.grave {
             f.push(format!("highpass=f={:.0}", self.grave_hz));
         }
-        if self.bruit {
+        if self.bruit && !debruite {
             // nf : la voix n'est pas prise pour du bruit au-dessus de −50 dB.
             f.push(format!("afftdn=nr={:.1}:nf=-50:tn=1", 2.0 + self.bruit_force * 28.0));
         }
@@ -91,10 +97,14 @@ mod tests {
 
     #[test]
     fn chaine_dans_l_ordre() {
-        assert_eq!(Voix::aucune().filtres(), None);
-        let f = Voix { adoucir: true, ..Voix::default() }.filtres().unwrap();
+        assert_eq!(Voix::aucune().filtres(false), None);
+        let f = Voix { adoucir: true, ..Voix::default() }.filtres(false).unwrap();
         let rang = |m: &str| f.find(m).unwrap();
         assert!(rang("highpass") < rang("afftdn") && rang("afftdn") < rang("deesser") && rang("deesser") < rang("acompressor"), "{f}");
+        // DeepFilterNet passé avant : le reste de la chaîne, dans le même ordre, sans afftdn.
+        let f = Voix { adoucir: true, ..Voix::default() }.filtres(true).unwrap();
+        assert!(!f.contains("afftdn") && f.find("highpass") < f.find("deesser") && f.find("deesser") < f.find("acompressor"), "{f}");
+        assert_eq!(Voix { grave: false, egaliser: false, ..Voix::default() }.filtres(true), None);
         assert_eq!(Voix::default().cible(), "I=-14.0:TP=-1.0:LRA=11");
     }
 

@@ -83,6 +83,7 @@ impl crate::Monteur {
                 self.ouvrir_modele = true;
             }
         }
+        ligne(ui, true, "Débruitage de la voix", "DeepFilterNet 3, dans le Monteur (Voix…)");
         let langue = noyau::sous_titres::langue();
         let nom_langue = noyau::sous_titres::LANGUES.iter().find(|(c, _)| *c == langue).map_or("français", |(_, n)| n);
         ligne(ui, true, "Langue des sous-titres", &format!("{nom_langue} (Montage › Langue des sous-titres)"));
@@ -128,7 +129,7 @@ impl crate::Monteur {
         ui.text_wrapped("Logiciel libre, sous licence GPL version 3 ou suivante : chacun peut l'étudier, le modifier et le redistribuer.");
         ui.text_colored(charte::c(charte::TEXT_2), SOURCES);
         ui.text_wrapped("Le nom et le logo VerdierCAM restent la marque de l'Atelier du Verdier.");
-        ui.text_wrapped("Il s'appuie sur FFmpeg, whisper.cpp, Dear ImGui, wgpu et cpal ; leurs licences sont dans le dossier licences.");
+        ui.text_wrapped("Il s'appuie sur FFmpeg, whisper.cpp, DeepFilterNet, Dear ImGui, wgpu et cpal ; leurs licences sont dans le dossier licences.");
         ui.spacing();
         if ui.button_with_size("Code source", [150.0, 30.0]) {
             let _ = opener::open_browser(SOURCES);

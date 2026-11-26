@@ -3,12 +3,33 @@
 ## Nettoyer la voix
 
 Bouton Voix… du ruban, ou Montage › Nettoyer la voix. Les réglages valent pour toutes les prises,
-dans `~/.local/share/monteur/voix.json`. Chaîne, dans l'ordre : coupe du grave, bruit, sifflantes,
-compresseur, puis niveau. La même sert au rendu et à l'écoute des 10 s autour de la tête.
+dans `~/.local/share/monteur/voix.json`. Chaîne, dans l'ordre : bruit (DeepFilterNet, avant ffmpeg), coupe
+du grave, sifflantes, compresseur, puis niveau. La même sert au rendu et à l'écoute des 10 s autour de la tête.
 
-Bruit : `afftdn` de ffmpeg et non RNNoise comme le prévoyait la maquette : il tient dans la même
-chaîne de filtres et ne demande aucun modèle. Sur la prise du 05/11 à 08:20, à 16 dB : silences de
-−68,4 à −75,9 dB, voix inchangée (−26,3 à −26,7 dB). Au-delà de 16 dB, presque rien de plus.
+Bruit, depuis le 26/11/2026 : **DeepFilterNet 3** (crate `debruitage`, libDF de Rikorose/DeepFilterNet, moteur
+tract), choisi par Christophe à l'écoute contre `afftdn` et RNNoise, sur 45 s de « premier usinage » : `afftdn`
+ne changeait presque rien au bruit d'atelier (fond à −41,7 dB contre −41,5 avant), DeepFilterNet le retire entre
+les mots (−79 dB). Le son de la prise est lu par ffmpeg en 48 kHz, ses deux canaux moyennés, débruité par blocs de
+10 ms, le retard du modèle (30 ms) rattrapé, et écrit dans un WAV mono à côté du rendu
+(`….partiel.mp4.voix.wav`, effacé après) ; ce WAV prend la place du son de la prise dans le graphe du rendu.
+L'écoute avant/après fait de même sur ses 10 s, dans un WAV jetable.
+
+- Le modèle (8 Mo) est compilé dans le programme (`default-model` de libDF) : rien à télécharger, Windows compris.
+- Seuils de libDF : ceux de l'outil `deep-filter` (−15, 35, 35 dB). Ceux de `RuntimeParams::default_with_ch`
+  (−10, 30, 20) sautent des étages du modèle sur la voix : elle sortait 5 dB plus bas, corrélée à 0,83 avec la
+  version Python validée, contre 0,998 avec les bons, au même niveau et sans décalage.
+- Force : `bruit_force` de 0 à 1 donne l'atténuation maximale (`atten_lim` de libDF) de 6 à 60 dB, sans limite à
+  100 %. Après toute la chaîne (compresseur et niveau compris), le fond de l'essai : −30 dB sans débruitage,
+  −62 dB à 50 %, −68 dB à 75 %, −71 dB à 100 %, la voix à −11,5 dB.
+- Vitesse : sur un seul cœur du Ryzen 9 7945HX, 12 s pour 6 min de son ; une prise de 40 min, 1 min 20.
+- Secours : si DeepFilterNet échoue (prise sans son lisible…), `afftdn` reprend sa place dans la chaîne ffmpeg,
+  comme avant : `Voix::filtres(false)`.
+- En debug, tract 0.21.4 non optimisé échoue à préparer le modèle : ses crates sont optimisés même en debug
+  (`[profile.dev.package]` du `Cargo.toml`). Les 0.21 suivantes ont changé l'API qu'utilise libDF : épinglé.
+
+Avant, `afftdn` de ffmpeg et non RNNoise comme le prévoyait la maquette : il tenait dans la même chaîne de filtres
+et ne demandait aucun modèle. Sur la prise du 05/11 à 08:20, à 16 dB : silences de −68,4 à −75,9 dB, voix
+inchangée (−26,3 à −26,7 dB) ; c'était une prise au bureau, sans le bruit de l'atelier.
 
 Niveau : le gain mesuré puis un limiteur. Le second passage de `loudnorm` basculait en mode
 dynamique à cause des crêtes et ratait la cible (−16,9 LUFS, crête +2,2 dB). Maintenant, sur une prise

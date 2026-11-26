@@ -767,7 +767,7 @@ impl Monteur {
             ui.text("Son");
             if pre.son {
                 ligne("Niveau visé", if v.niveau { format!("{:.0} LUFS · crête {:.1} dB", v.niveau_lufs, v.crete_db) } else { "non réglé".to_string() });
-                ligne("Voix", if v.filtres().is_some() { "nettoyée".to_string() } else { "telle quelle".to_string() });
+                ligne("Voix", if v.filtres(false).is_some() { "nettoyée".to_string() } else { "telle quelle".to_string() });
             } else {
                 ligne("Son", "aucun".to_string());
             }
@@ -811,12 +811,14 @@ impl Monteur {
                         let f = self.rendu.as_ref().map_or(0.0, |r| r.suivi.fraction());
                         ui.progress_bar(f as f32).size([200.0, 16.0]).build();
                         ui.same_line();
-                        // Avant la première image, le son de toute la prise s'écoute (1 à 2 min pour 40 min) : un temps
+                        // Avant la première image, DeepFilterNet débruite la voix (1 min 20 pour 40 min), puis le son de toute
+                        // la prise s'écoute (1 à 2 min) : un temps
                         // restant tiré de 0 % grimpait sans fin (25/11/2026, « c'est normal que ça tourne comme ça ? »).
                         let etape = match &self.rendu {
                             Some(r) if r.suivi.vignette.load(std::sync::atomic::Ordering::Relaxed) => "100 % · vignette en tête…".to_string(),
                             Some(r) => match r.images {
                                 Some(depuis) if f > 0.0 => format!("{:.0} % · reste {}", f * 100.0, chrono_court(depuis.elapsed().as_secs_f64() * (1.0 - f) / f.max(0.01))),
+                                _ if r.suivi.debruitage.load(std::sync::atomic::Ordering::Relaxed) => "débruitage de la voix…".to_string(),
                                 _ => "mesure du son…".to_string(),
                             },
                             None => String::new(),

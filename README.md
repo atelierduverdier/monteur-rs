@@ -30,7 +30,8 @@ cargo build --release
 target/release/monteur2
 ```
 
-FFmpeg 9 et ses en-têtes viennent du paquet `ffmpeg` du système. Le groupe `dear-imgui-*` / `dear-app` est épinglé
+FFmpeg 9 et ses en-têtes viennent du paquet `ffmpeg` du système. DeepFilterNet (MIT/Apache-2.0) se prend à son
+dépôt git, à une révision épinglée, avec tract 0.21.4 : la première construction a besoin du réseau. Le groupe `dear-imgui-*` / `dear-app` est épinglé
 dans `Cargo.toml` : il change de version d'un bloc ; `vendor/dear-app` y ajoute l'identité de la fenêtre (Wayland)
 et son icône (Windows). Ce qui change d'un système à l'autre passe par `noyau::systeme`
 ([docs/portabilite.md](docs/portabilite.md)). `outils/voir-fenetre.sh` et `outils/voir-fenetre-windows.sh`
@@ -43,6 +44,7 @@ montrent la fenêtre dans un KWin virtuel, pilotée par un déroulé d'essai.
 - `crates/composeur` : l'image montée d'un instant, la vignette et le carton de fin ; contrôlé contre le Monteur 1 ([docs/etape-2.md](docs/etape-2.md)).
 - `crates/media` : la lecture (image, son, horloge du son, sauts) et les petits sons (bips, écoute, micro).
 - `crates/rendu` : la vidéo finale ([docs/etape-4.md](docs/etape-4.md)).
+- `crates/debruitage` : le bruit d'atelier retiré de la voix par DeepFilterNet 3 (libDF, sur le processeur), modèle inclus dans le programme ([docs/voix-et-rendu.md](docs/voix-et-rendu.md)).
 - `crates/appli` : la fenêtre (`monteur2`) : filmer ([docs/filmer.md](docs/filmer.md)), whisper et YouTube ([docs/etape-5.md](docs/etape-5.md)), l'aide.
 - `essais/` : les essais de l'étape 0 (fenêtre, vidéo, son), chacun avec ses mesures.
 - `ressources/` : l'icône, le logo, les polices Inter et JetBrains Mono (licence OFL).
@@ -56,4 +58,5 @@ Maquette : https://claude.ai/artifact/C1NuBZgz9sp1WUtKfbTQNo
 ## Licence
 
 GPL version 3 ou suivante ([LICENSE](LICENSE)). Le nom et le logo VerdierCAM n'en font pas partie
-([MARQUE.md](MARQUE.md)).
+([MARQUE.md](MARQUE.md)). DeepFilterNet, son code et son modèle, est sous MIT ou Apache-2.0
+([ressources/DeepFilterNet-MIT.txt](ressources/DeepFilterNet-MIT.txt)).

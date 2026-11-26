@@ -119,10 +119,11 @@ else
 fi
 
 # 4. Les licences : le Monteur (GPL, et la marque VerdierCAM à part), FFmpeg (GPL, avec x264), whisper.cpp (MIT),
-# llvm-mingw (libc++), les polices (OFL).
+# DeepFilterNet (MIT, son modèle est dans le programme), llvm-mingw (libc++), les polices (OFL).
 cp "$DEPOT/LICENSE" "$SORTIE/licences/Monteur-VerdierCAM-GPL-3.0.txt"
 cp "$DEPOT/MARQUE.md" "$SORTIE/licences/Marque-VerdierCAM.txt"
 cp "$FFMPEG/LICENSE.txt" "$SORTIE/licences/FFmpeg.txt"
+cp "$DEPOT/ressources/DeepFilterNet-MIT.txt" "$SORTIE/licences/DeepFilterNet.txt"
 [ -f "$SORTIE/whisper-cli.exe" ] && cp "$(ls -d "$CHAINE"/sources/whisper.cpp-*/LICENSE | tail -1)" "$SORTIE/licences/whisper.cpp.txt"
 [ -f "$SORTIE/libc++.dll" ] && cp "$LLVM/LICENSE.TXT" "$SORTIE/licences/llvm-mingw.txt"
 cp "$DEPOT/ressources/polices/OFL-Inter.txt" "$DEPOT/ressources/polices/OFL-JetBrainsMono.txt" "$SORTIE/licences/"
@@ -140,7 +141,8 @@ cp "$DEPOT/ressources/polices/OFL-Inter.txt" "$DEPOT/ressources/polices/OFL-JetB
     echo "Logiciel libre, sous licence GPL version 3 ou suivante (licences/). Code source :"
     echo "https://github.com/atelierduverdier/monteur-verdiercam"
     echo "FFmpeg vient de https://github.com/BtbN/FFmpeg-Builds ($(basename "$(readlink -f "$FFMPEG")")),"
-    echo "whisper-cli de whisper.cpp, compilé depuis ses sources."
+    echo "whisper-cli de whisper.cpp, compilé depuis ses sources. DeepFilterNet, qui débruite la voix, est dans"
+    echo "le Monteur lui-même, avec son modèle."
 } > "$SORTIE/LISEZMOI.txt"
 
 # Le mode d'emploi, en une page : Aide › Mode d'emploi l'ouvre, sans réseau.
