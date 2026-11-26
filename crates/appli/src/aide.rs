@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use dear_imgui_rs::{Ui, WindowFlags};
 
 /// Le code source, à donner avec le programme (GPL).
-pub const SOURCES: &str = "https://github.com/atelierduverdier/monteur-rs";
+pub const SOURCES: &str = "https://github.com/atelierduverdier/monteur-verdiercam";
 /// Le mode d'emploi en ligne, quand il n'est pas à côté du programme.
-const MODE_EMPLOI_EN_LIGNE: &str = "https://github.com/atelierduverdier/monteur-rs/blob/main/docs/mode-emploi.md";
+const MODE_EMPLOI_EN_LIGNE: &str = "https://github.com/atelierduverdier/monteur-verdiercam/blob/main/docs/mode-emploi.md";
 
 fn chemin_accueil() -> PathBuf {
     noyau::systeme::donnees().join("accueil-vu")

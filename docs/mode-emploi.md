@@ -179,5 +179,5 @@ JPG à côté de la vidéo) dans « Miniature ».
 ## Licence
 
 Le Monteur VerdierCAM est un logiciel libre, sous licence GPL version 3 ou suivante : son code est sur
-https://github.com/atelierduverdier/monteur-rs. Le nom et le logo VerdierCAM restent la marque de l'Atelier du
+https://github.com/atelierduverdier/monteur-verdiercam. Le nom et le logo VerdierCAM restent la marque de l'Atelier du
 Verdier. Il s'appuie sur FFmpeg, whisper.cpp, Dear ImGui, wgpu et cpal ; leurs licences sont livrées avec lui.

@@ -138,7 +138,7 @@ cp "$DEPOT/ressources/polices/OFL-Inter.txt" "$DEPOT/ressources/polices/OFL-JetB
     echo "clic droit sur le zip › Propriétés › cocher « Débloquer » › OK."
     echo
     echo "Logiciel libre, sous licence GPL version 3 ou suivante (licences/). Code source :"
-    echo "https://github.com/atelierduverdier/monteur-rs"
+    echo "https://github.com/atelierduverdier/monteur-verdiercam"
     echo "FFmpeg vient de https://github.com/BtbN/FFmpeg-Builds ($(basename "$(readlink -f "$FFMPEG")")),"
     echo "whisper-cli de whisper.cpp, compilé depuis ses sources."
 } > "$SORTIE/LISEZMOI.txt"
