@@ -271,8 +271,11 @@ Sans gpu-screen-recorder ni OBS : `capture_windows.rs` filme une fenêtre par Wi
 - **Le décompte** se joue avant la première image : la fenêtre est déjà choisie. **Windows+F12** arrête
   (`RegisterHotKey`). Fermer le Monteur en filmant termine la prise.
 - **La webcam** (25/11/2026, docs/filmer.md) : par DirectShow, le ffmpeg.exe du paquet (`-f dshow`, la caméra
-  trouvée par `-list_devices`), en 1280 × 720 à 30 i/s, sinon telle qu'elle se donne. Pas encore essayée sur un vrai
-  Windows.
+  trouvée par `-list_devices`), en 1280 × 720 à 30 i/s, sinon telle qu'elle se donne. Pas encore filmée sur un vrai
+  Windows. Le 26/11/2026, au PC de l'atelier, la C920 restait invisible : « Accès à la caméra » coupé dans la
+  confidentialité de Windows (registre `CapabilityAccessManager\ConsentStore\webcam`, `Value` = `Deny` pour la
+  machine et le compte). DirectShow ne listait plus que son micro. `webcam::blocage` lit ces trois interrupteurs
+  et le dit (Aide › Ce qu'il faut, et « La webcam n'a rien filmé ») ; une fois réactivé, ffmpeg voit la C920.
 
 Essayé ici : 6 contrôles d'`enregistreur.rs` sous Linux, dont une vraie prise de 2 s par une source factice
 (60 images, nom d'OBS, rien qui traîne), un mélange réel (une piste stéréo, 2 s) et le calage (saboté : il

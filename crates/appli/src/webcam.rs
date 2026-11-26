@@ -55,6 +55,57 @@ pub fn cameras() -> Vec<Camera> {
     sortie.map(|o| cameras_dshow(&String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
 }
 
+/// Ce qui empêche la caméra de filmer sous Windows, dit pour qu'on sache quoi activer ; `None` : rien ne l'empêche (ou
+/// pas Windows). Le 26/11/2026, au PC de l'atelier : la C920 reconnue, son micro marchait, mais « Accès à la caméra »
+/// était coupé dans la confidentialité de Windows ; ffmpeg ne voyait plus la caméra, et le Monteur semblait ne pas la
+/// trouver. Les trois interrupteurs de Paramètres › Confidentialité et sécurité › Caméra sont dans le registre
+/// (`CapabilityAccessManager\ConsentStore\webcam`, valeur `Value` : « Allow » ou « Deny »).
+pub fn blocage() -> Option<String> {
+    #[cfg(windows)]
+    {
+        cause_blocage(consentement(true, "").as_deref(), consentement(false, "").as_deref(), consentement(false, r"\NonPackaged").as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Le premier interrupteur coupé, de la machine aux applications de bureau.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn cause_blocage(machine: Option<&str>, utilisateur: Option<&str>, bureau: Option<&str>) -> Option<String> {
+    let coupe = |v: Option<&str>| v.is_some_and(|v| v.eq_ignore_ascii_case("Deny"));
+    let interrupteur = if coupe(machine) {
+        "« Accès à la caméra »"
+    } else if coupe(utilisateur) {
+        "« Autoriser les applications à accéder à votre caméra »"
+    } else if coupe(bureau) {
+        "« Autoriser les applications de bureau à accéder à votre caméra »"
+    } else {
+        return None;
+    };
+    Some(format!("Windows bloque la caméra : dans Paramètres › Confidentialité et sécurité › Caméra, active {interrupteur}, puis relance le Monteur."))
+}
+
+/// La valeur d'un interrupteur de la caméra : `machine` pour tout l'ordinateur, sinon pour ce compte.
+#[cfg(windows)]
+fn consentement(machine: bool, sous_cle: &str) -> Option<String> {
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    use windows::core::{HSTRING, PCWSTR, w};
+    let cle = HSTRING::from(format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam{sous_cle}"));
+    let racine = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let mut tampon = [0u16; 32];
+    let mut octets = std::mem::size_of_val(&tampon) as u32;
+    // SAFETY : la clé vit jusqu'à la fin de l'appel ; le tampon et sa taille en octets vont ensemble.
+    let e = unsafe { RegGetValueW(racine, PCWSTR(cle.as_ptr()), w!("Value"), RRF_RT_REG_SZ, None, Some(tampon.as_mut_ptr().cast()), Some(&mut octets)) };
+    if e != ERROR_SUCCESS {
+        return None;
+    }
+    let n = (octets as usize / 2).min(tampon.len());
+    Some(String::from_utf16_lossy(&tampon[..n]).trim_end_matches('\0').to_string())
+}
+
 /// Les caméras dans ce que ffmpeg écrit pour `-list_devices true -f dshow` : `[dshow @ …] "Nom" (video)`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn cameras_dshow(texte: &str) -> Vec<Camera> {
@@ -148,7 +199,10 @@ impl Webcam {
             Some(d) if self.partiel.exists() => Ok((self.partiel.clone(), d)),
             _ => {
                 let _ = std::fs::remove_file(&self.partiel);
-                Err(format!("La webcam n'a rien filmé ({}).", if p.derniere_ligne.is_empty() { "pas de réponse" } else { &p.derniere_ligne }))
+                Err(match blocage() {
+                    Some(b) => format!("La webcam n'a rien filmé. {b}"),
+                    None => format!("La webcam n'a rien filmé ({}).", if p.derniere_ligne.is_empty() { "pas de réponse" } else { &p.derniere_ligne }),
+                })
             }
         }
     }
@@ -238,6 +292,24 @@ mod tests {
         // La ligne du flux la répète ; un « start » de fichier ordinaire (près de 0) n'est pas une heure.
         assert_eq!(lire_debut("  Stream #0:0: Video: mjpeg, 1280x720, 30 fps, start 1795583318.246285"), None);
         assert_eq!(lire_debut("  Duration: 00:00:02.00, start: 0.000000, bitrate: 600 kb/s"), None);
+    }
+
+    #[test]
+    fn le_premier_interrupteur_coupe() {
+        assert_eq!(cause_blocage(None, None, None), None);
+        assert_eq!(cause_blocage(Some("Allow"), Some("Allow"), Some("Allow")), None);
+        // Le PC de l'atelier, le 26/11/2026 : coupé pour la machine et pour le compte, permis aux applications de bureau.
+        let b = cause_blocage(Some("Deny"), Some("Deny"), Some("Allow")).unwrap();
+        assert!(b.contains("« Accès à la caméra »") && b.contains("Confidentialité et sécurité › Caméra"), "{b}");
+        assert!(cause_blocage(Some("Allow"), Some("deny"), None).unwrap().contains("« Autoriser les applications à accéder"));
+        assert!(cause_blocage(None, None, Some("Deny")).unwrap().contains("applications de bureau"));
+    }
+
+    /// Ce que dit ce poste : `cargo test -- --ignored --nocapture blocage_de_ce_poste`, sous Windows.
+    #[test]
+    #[ignore]
+    fn blocage_de_ce_poste() {
+        println!("blocage : {:?}", blocage());
     }
 
     #[test]

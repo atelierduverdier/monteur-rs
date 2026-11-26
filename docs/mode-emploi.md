@@ -88,6 +88,11 @@ montage, calée toute seule :
 
 Ce que tu vois est ce qui sort : le rendu incruste la webcam comme la visionneuse.
 
+Sous Windows, une caméra branchée peut rester invisible si Windows en interdit l'accès : le micro de la caméra
+marche, l'image non. Le Monteur le dit, dans **Aide › Ce qu'il faut** (ligne « Webcam ») et quand la webcam n'a rien
+filmé, avec l'interrupteur à activer dans **Paramètres › Confidentialité et sécurité › Caméra**. Relance ensuite le
+Monteur.
+
 ## Les prises et les projets
 
 À gauche, la liste des prises du dossier : miniature, date, durée, et leur état (montée, vignette, envoyée). Un

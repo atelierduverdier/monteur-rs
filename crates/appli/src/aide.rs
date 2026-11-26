@@ -49,6 +49,8 @@ impl crate::Monteur {
     pub(crate) fn boite_ce_qu_il_faut(&mut self, ui: &Ui) {
         const TITRE: &str = "Ce qu'il faut";
         if std::mem::take(&mut self.ouvrir_ce_qu_il_faut) {
+            // Les caméras cherchées de nouveau : une branchée, ou permise par Windows, depuis la dernière fois.
+            self.cameras = None;
             ui.open_popup(TITRE);
         }
         let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() else { return };
@@ -65,6 +67,15 @@ impl crate::Monteur {
             let detail = if gsr.is_some() { ou(gsr) } else { "gpu-screen-recorder à installer (paquet de la distribution, ou Flatpak)".into() };
             ligne(ui, gsr_present(), "Filmer", &detail);
         }
+        // La webcam est facultative : sans caméra, pas d'alerte ; une caméra que Windows bloque, si.
+        let blocage = crate::webcam::blocage();
+        let noms: Vec<String> = if image { self.cameras().iter().map(|c| c.nom.clone()).collect() } else { Vec::new() };
+        let detail = match (&blocage, noms.is_empty()) {
+            (Some(b), _) => b.clone(),
+            (None, true) => "aucune caméra trouvée (facultative : Fichier › Filmer aussi la webcam)".into(),
+            (None, false) => noms.join(", "),
+        };
+        ligne(ui, blocage.is_none(), "Webcam", &detail);
         let whisper = noyau::systeme::trouver_programme("whisper-cli");
         ligne(ui, whisper.is_some(), "Sous-titres", &if whisper.is_some() { ou(whisper) } else { "whisper-cli introuvable : pas de sous-titres".into() });
         let modele = noyau::sous_titres::trouver_modele();

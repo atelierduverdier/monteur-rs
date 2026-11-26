@@ -959,6 +959,10 @@ impl Monteur {
 
     /// Fichier › Filmer aussi la webcam : la caméra choisie (la première trouvée par défaut), ou plus de webcam.
     fn choisir_camera(&mut self, entree: Option<String>) {
+        // Aucune caméra la dernière fois : peut-être branchée ou permise depuis, on cherche de nouveau.
+        if self.cameras.as_ref().is_some_and(Vec::is_empty) {
+            self.cameras = None;
+        }
         match entree.or_else(|| self.cameras().first().map(|c| c.entree.clone())) {
             Some(e) => {
                 let _ = std::fs::create_dir_all(noyau::systeme::donnees());
@@ -967,7 +971,7 @@ impl Monteur {
                 self.message = format!("La webcam ({nom}) sera filmée avec chaque prise.");
                 self.camera_choisie = Some(e);
             }
-            None => self.message = "Aucune webcam trouvée sur ce poste.".into(),
+            None => self.message = webcam::blocage().unwrap_or_else(|| "Aucune webcam trouvée sur ce poste.".into()),
         }
     }
 
