@@ -4,7 +4,7 @@
 //! coupe <rang>`, `preparer` (attend la fin), `zoom <s>`, `tracer <ax> <ay> <bx> <by>`, `stop`, `projet <nom>`, `inserer dessus|intercalee <t> <fichier>`, `titre <texte>`,
 //! `nouveau <nom>`, `enregistrer`, `chapitre <s>`, `proposer_chapitres`, `scinder <s>`,
 //! `accelerer <a> <b>`, `inserer_chapitres`, `proposer`, `envoyer` (faux programme seulement),
-//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `filmer_simple`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
+//! `refaire_sous_titres`, `rendre` (attend la fin), `rendre_en_fond`, `arreter_rendu`, `filmer`, `filmer_ecran`, `filmer_simple`, `arreter_ecran`, `niveau`, `fermer_projet`, `onglet_vignette`, `fenetre_voix`, `fenetre_rendre`, `file <préréglage>`, `demander_corbeille <rang>…`, `clic_prise <rang> [ctrl] [maj]`, `clic_droit_prise <rang>`, `confirmer_corbeille`, `onglet_texte`, `couper_phrase <rang>`, `liste`, `marquer` (touche C), `ecrire_vignette`, `capture_vignette <f.png>`, `couper <a> <b>`, `defaire`, `capture <fichier.png>`
 //! (l'image de la visionneuse), `dire` (la position et l'état sur la sortie), `dire_voix` (les réglages
 //! de la voix), `midi <cc> <valeur>` (un message du nanoKONTROL2 : 127 appuie un bouton, 0 le relâche),
 //! `webcam_grand` (touche W à la tête de lecture), `webcam_place <x> <y> <largeur>`, `choisir_webcam <rang>`,
@@ -143,15 +143,30 @@ impl Scenario {
                     }
                 }
                 "demander_corbeille" => {
-                    if let Some((p, _)) = m.dossier.prises.get(nombre(1) as usize) {
-                        let p = p.clone();
-                        m.demander_corbeille(p);
+                    let videos = mots[1..].iter().filter_map(|r| r.parse::<usize>().ok()).filter_map(|r| m.dossier.prises.get(r)).map(|(p, _)| p.clone()).collect();
+                    m.demander_corbeille(videos);
+                }
+                // Un clic dans la liste des prises, Ctrl et Maj tenues si dit : comme à la souris.
+                "clic_prise" => {
+                    let liste = m.chemins_des_prises();
+                    let ouverte = m.prise.as_ref().map(|p| p.video.clone());
+                    let (ctrl, maj) = (mots.contains(&"ctrl"), mots.contains(&"maj"));
+                    let i = nombre(1) as usize;
+                    if m.selection.cliquer(&liste, i, ctrl, maj, ouverte.as_deref()) {
+                        m.a_ouvrir = Some(liste[i].clone());
+                    }
+                    println!("  {} prise(s) choisie(s)", m.selection.nombre());
+                }
+                "clic_droit_prise" => {
+                    let liste = m.chemins_des_prises();
+                    if let Some(p) = liste.get(nombre(1) as usize) {
+                        let videos = m.selection.a_jeter(&liste, p);
+                        m.demander_corbeille(videos);
                     }
                 }
                 "confirmer_corbeille" => {
-                    if let Some(v) = m.a_jeter.take() {
-                        m.mettre_a_la_corbeille(&v);
-                    }
+                    let v = std::mem::take(&mut m.a_jeter);
+                    m.mettre_a_la_corbeille(&v);
                 }
                 "fenetre_voix" => m.voix.ouvrir(),
                 "ce_qu_il_faut" => m.ouvrir_ce_qu_il_faut = true,

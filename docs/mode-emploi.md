@@ -93,6 +93,14 @@ Ce que tu vois est ce qui sort : le rendu incruste la webcam comme la visionneus
 À gauche, la liste des prises du dossier : miniature, date, durée, et leur état (montée, vignette, envoyée). Un
 clic ouvre une prise ; clic droit : la mettre à la corbeille (jamais de suppression définitive).
 
+Pour en jeter **plusieurs d'un coup**, choisis-les comme dans un gestionnaire de fichiers : **Ctrl+clic** en ajoute
+une (ou la retire), **Maj+clic** prend toutes celles entre la dernière cliquée et celle-ci (Ctrl+Maj+clic les
+ajoute au choix). Ces clics n'ouvrent pas de prise. « N prises choisies » s'affiche au-dessus de la liste, avec
+**Corbeille…** et **Aucune** (tout désélectionner) ; un clic droit sur l'une d'elles, ou Fichier › Mettre les N
+prises choisies à la corbeille, fait la même chose. Une seule confirmation dit combien partent, lesquelles, avec
+leurs fichiers et leur poids. Si la prise ouverte en fait partie, elle est d'abord enregistrée, puis fermée.
+Un clic simple revient à une seule prise.
+
 Les prises arrivent dans **Vidéos › Copies d'écran**. Un **projet** (Fichier › Nouveau projet) est un dossier dans
 **Vidéos › Projets** : la prise y part avec tout ce qui l'accompagne (montage, vignette, rendus, vidéos insérées).
 Le sélecteur en haut de la liste passe d'un dossier à l'autre ; « Ouvrir le dossier » le montre.

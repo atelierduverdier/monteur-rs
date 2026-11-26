@@ -108,3 +108,7 @@ celle de KDE sous Linux, celle de Windows sous Windows). Jamais de suppression d
 pendant un rendu ou un envoi. Le déroulé d'essai pose `XDG_DATA_HOME` : la corbeille est alors celle
 du dossier jetable, pas la vraie.
 
+Plusieurs prises (26/11/2026) : Ctrl+clic et Maj+clic les choisissent (`noyau::selection`, testé seul), et
+la même confirmation les liste toutes ; un seul `trash::delete_all` pour tous leurs fichiers. Au scénario :
+`clic_prise <rang> [ctrl] [maj]`, `clic_droit_prise <rang>`, `demander_corbeille <rang>…`.
+

@@ -257,8 +257,10 @@ struct Monteur {
     raccourci: Option<Receiver<raccourci::Evenement>>,
     /// Le nanoKONTROL2, écouté dès le lancement.
     midi: midi::Midi,
-    /// La prise dont on demande la mise à la corbeille, en attente de confirmation.
-    a_jeter: Option<PathBuf>,
+    /// Les prises dont on demande la mise à la corbeille, en attente de confirmation.
+    a_jeter: Vec<PathBuf>,
+    /// Les prises choisies dans la liste (Ctrl+clic, Maj+clic), pour les jeter d'un coup.
+    selection: noyau::selection::Selection,
     ouvrir_corbeille: bool,
     /// Un enregistrement simple : il finit dans Copies d'écran, sans toucher au travail en cours.
     capture_simple: bool,
@@ -510,7 +512,8 @@ impl Monteur {
             verdiercam_lance: None,
             #[cfg(windows)]
             verdiercam_pid: None,
-            a_jeter: None,
+            a_jeter: Vec::new(),
+            selection: Default::default(),
             ouvrir_corbeille: false,
             a_preparer: None,
             cherche: String::new(),
@@ -539,6 +542,7 @@ impl Monteur {
 
     fn changer_de_dossier(&mut self, chemin: PathBuf) {
         self.dossier = Dossier::lire(&chemin, &self.fiches);
+        self.selection.garder(&self.chemins_des_prises());
         self.projets = noyau::projets::lister(&self.racine);
         self.relire = true;
     }
@@ -1471,16 +1475,33 @@ impl Monteur {
         let ouverte = self.prise.as_ref().map(|p| p.video.clone());
         const HAUT: f32 = 58.0;
         let (mh, ml) = (46.0, 46.0 * miniatures::LARGEUR as f32 / miniatures::HAUTEUR as f32);
+        let liste = self.chemins_des_prises();
+        let n = self.selection.nombre();
+        if n > 1 {
+            // Le choix multiple, en clair au-dessus de la liste : combien, et ce qu'on en fait.
+            ui.text_colored(charte::c(charte::ACCENT), format!("{n} prises choisies"));
+            ui.same_line();
+            if ui.small_button("Corbeille…##choisies") {
+                self.demander_corbeille(self.selection.choisies_dans(&liste));
+            }
+            ui.same_line();
+            if ui.small_button("Aucune##choisies") {
+                self.selection.vider();
+            }
+        }
+        let (ctrl, maj) = (ui.io().key_ctrl(), ui.io().key_shift());
         let mut demande = None;
+        let mut clic = None;
         for (i, (chemin, etat)) in self.dossier.prises.iter().enumerate() {
-            if ui.selectable_config(format!("##prise{i}")).selected(ouverte.as_ref() == Some(chemin)).size([0.0, HAUT]).build() {
-                self.a_ouvrir = Some(chemin.clone());
+            let choisie = self.selection.est_choisie(chemin, ouverte.as_deref());
+            if ui.selectable_config(format!("##prise{i}")).selected(choisie).size([0.0, HAUT]).build() {
+                clic = Some(i);
             }
             if ui.is_item_clicked_with_button(MouseButton::Right) {
-                demande = Some(chemin.clone());
+                demande = Some(self.selection.a_jeter(&liste, chemin));
             }
             if ui.is_item_hovered() {
-                ui.tooltip_text("Clic droit : mettre à la corbeille");
+                ui.tooltip_text("Ctrl+clic, Maj+clic : en choisir plusieurs. Clic droit : mettre à la corbeille");
             }
             let (a, b) = (ui.item_rect_min(), ui.item_rect_max());
             let dl = ui.get_window_draw_list();
@@ -1510,9 +1531,18 @@ impl Monteur {
         if self.dossier.prises.is_empty() {
             ui.text_wrapped(format!("Aucune vidéo dans {}", self.dossier.chemin.display()));
         }
+        if let Some(i) = clic
+            && self.selection.cliquer(&liste, i, ctrl, maj, ouverte.as_deref())
+        {
+            self.a_ouvrir = Some(liste[i].clone());
+        }
         if let Some(d) = demande {
             self.demander_corbeille(d);
         }
+    }
+
+    fn chemins_des_prises(&self) -> Vec<PathBuf> {
+        self.dossier.prises.iter().map(|(p, _)| p.clone()).collect()
     }
 
     /// Sous la barre de menus : ce qu'on fait le plus souvent, en vue.
@@ -1636,57 +1666,95 @@ impl Monteur {
         }
     }
 
-    /// La boîte « Nouveau projet ».
-    fn demander_corbeille(&mut self, video: PathBuf) {
-        self.a_jeter = Some(video);
+    /// Une ou plusieurs prises à jeter : la confirmation s'ouvre au prochain tour.
+    fn demander_corbeille(&mut self, videos: Vec<PathBuf>) {
+        if videos.is_empty() {
+            return;
+        }
+        self.a_jeter = videos;
         self.ouvrir_corbeille = true;
     }
 
-    /// La confirmation : le nom de la prise, et tout ce qui part avec elle.
+    /// La confirmation : combien de prises, lesquelles, et tout ce qui part avec elles.
     fn boite_corbeille(&mut self, ui: &Ui) {
         const TITRE: &str = "Mettre à la corbeille";
         if std::mem::take(&mut self.ouvrir_corbeille) {
             ui.open_popup(TITRE);
         }
         let Some(boite) = ui.begin_modal_popup_config(TITRE).flags(WindowFlags::ALWAYS_AUTO_RESIZE).begin() else { return };
-        let Some(video) = self.a_jeter.clone() else {
+        if self.a_jeter.is_empty() {
             ui.close_current_popup();
             boite.end();
             return;
-        };
-        let fichiers = noyau::videos::fichiers_lies(&video);
-        let octets: u64 = fichiers.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
-        ui.text(video.file_name().unwrap_or_default().to_string_lossy());
-        ui.text_colored(charte::c(charte::TEXT_2), format!("{} fichier(s), {:.0} Mo :", fichiers.len(), octets as f64 / 1e6));
-        for f in &fichiers {
-            ui.bullet_text(f.file_name().unwrap_or_default().to_string_lossy());
+        }
+        let videos = self.a_jeter.clone();
+        let taille = |fichiers: &[PathBuf]| -> u64 { fichiers.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum() };
+        let nom = |v: &Path| v.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        if let [video] = videos.as_slice() {
+            let fichiers = noyau::videos::fichiers_lies(video);
+            ui.text(nom(video));
+            ui.text_colored(charte::c(charte::TEXT_2), format!("{} fichier(s), {:.0} Mo :", fichiers.len(), taille(&fichiers) as f64 / 1e6));
+            for f in &fichiers {
+                ui.bullet_text(f.file_name().unwrap_or_default().to_string_lossy());
+            }
+        } else {
+            // Plusieurs : une ligne par prise, ses fichiers et son poids ; la liste défile si elle est longue.
+            let parts: Vec<(String, usize, u64)> = videos
+                .iter()
+                .map(|v| {
+                    let f = noyau::videos::fichiers_lies(v);
+                    (nom(v), f.len(), taille(&f))
+                })
+                .collect();
+            let (nf, octets) = parts.iter().fold((0, 0), |(n, o), p| (n + p.1, o + p.2));
+            ui.text(format!("{} prises", videos.len()));
+            ui.text_colored(charte::c(charte::TEXT_2), format!("{nf} fichier(s), {:.0} Mo en tout :", octets as f64 / 1e6));
+            let haut = (parts.len() as f32 * ui.text_line_height_with_spacing()).min(260.0);
+            ui.child_window("##prises_a_jeter").size([520.0, haut]).build(ui, || {
+                for (n, k, o) in &parts {
+                    ui.bullet_text(format!("{n}  ({k} fichier(s), {:.0} Mo)", *o as f64 / 1e6));
+                }
+            });
         }
         ui.spacing();
         ui.text_wrapped("Tu pourras les récupérer depuis la corbeille.");
-        if !self.fiches.fiches.get(&noyau::videos::cle(&video)).map_or("", |f| f.youtube_id.as_str()).is_empty() {
-            ui.text_colored(charte::c(charte::ALERTE), "Cette vidéo a été envoyée : elle reste sur YouTube.");
+        if let Some(p) = self.prise.as_ref().filter(|p| videos.contains(&p.video)) {
+            let dit = if videos.len() > 1 { format!("La prise ouverte en fait partie ({}) : elle est enregistrée, puis fermée.", nom(&p.video)) } else { "C'est la prise ouverte : elle est enregistrée, puis fermée.".to_string() };
+            ui.text_colored(charte::c(charte::ALERTE), dit);
+        }
+        let envoyees = videos.iter().filter(|v| !self.fiches.fiches.get(&noyau::videos::cle(v)).map_or("", |f| f.youtube_id.as_str()).is_empty()).count();
+        match (envoyees, videos.len()) {
+            (0, _) => {}
+            (_, 1) => ui.text_colored(charte::c(charte::ALERTE), "Cette vidéo a été envoyée : elle reste sur YouTube."),
+            (1, _) => ui.text_colored(charte::c(charte::ALERTE), "L'une d'elles a été envoyée : elle reste sur YouTube."),
+            (k, _) => ui.text_colored(charte::c(charte::ALERTE), format!("{k} d'entre elles ont été envoyées : elles restent sur YouTube.")),
         }
         ui.spacing();
-        if ui.button_with_size("Mettre à la corbeille", [180.0, 30.0]) {
-            self.a_jeter = None;
-            self.mettre_a_la_corbeille(&video);
+        let bouton = if videos.len() > 1 { format!("Mettre les {} à la corbeille", videos.len()) } else { "Mettre à la corbeille".to_string() };
+        if ui.button_with_size(&bouton, [220.0, 30.0]) {
+            self.a_jeter.clear();
+            self.mettre_a_la_corbeille(&videos);
             ui.close_current_popup();
         }
         ui.same_line();
         if ui.button_with_size("Annuler##corbeille", [100.0, 30.0]) {
-            self.a_jeter = None;
+            self.a_jeter.clear();
             ui.close_current_popup();
         }
         boite.end();
     }
 
-    /// Jamais de suppression définitive : la corbeille du système (crate `trash`), récupérable.
-    fn mettre_a_la_corbeille(&mut self, video: &Path) {
+    /// Jamais de suppression définitive : la corbeille du système (crate `trash`), récupérable. Toutes
+    /// les prises d'un seul appel ; la prise ouverte, si elle en est, est enregistrée et fermée avant.
+    fn mettre_a_la_corbeille(&mut self, videos: &[PathBuf]) {
+        if videos.is_empty() {
+            return;
+        }
         if self.rendu.is_some() || self.envoi.is_some() {
             self.message = "Un rendu ou un envoi est en cours : attends sa fin.".into();
             return;
         }
-        if self.prise.as_ref().is_some_and(|p| p.video == video) {
+        if self.prise.as_ref().is_some_and(|p| videos.contains(&p.video)) {
             if let Some(e) = self.prise.as_mut().and_then(|p| p.ecrire_si_besoin(true)) {
                 self.message = e;
                 return;
@@ -1695,12 +1763,16 @@ impl Monteur {
             self.prise = None;
             self.vue.oublier_source();
         }
-        let fichiers = noyau::videos::fichiers_lies(video);
+        let mut fichiers: Vec<PathBuf> = videos.iter().flat_map(|v| noyau::videos::fichiers_lies(v)).collect();
+        fichiers.sort();
+        fichiers.dedup();
         let sortie = trash::delete_all(&fichiers);
+        self.selection.vider();
         self.a_changer = Some(self.dossier.chemin.clone());
-        self.message = match sortie {
-            Ok(()) => format!("{} fichier(s) à la corbeille : {}.", fichiers.len(), video.file_name().unwrap_or_default().to_string_lossy()),
-            Err(e) => format!("Corbeille impossible : {e}"),
+        self.message = match (sortie, videos) {
+            (Ok(()), [video]) => format!("{} fichier(s) à la corbeille : {}.", fichiers.len(), video.file_name().unwrap_or_default().to_string_lossy()),
+            (Ok(()), _) => format!("{} prises à la corbeille, {} fichier(s).", videos.len(), fichiers.len()),
+            (Err(e), _) => format!("Corbeille impossible : {e}"),
         };
     }
 
@@ -2446,10 +2518,15 @@ impl Application for Monteur {
                         sous.end();
                     }
                 }
-                if ui.menu_item_enabled_selected_no_shortcut("Mettre la prise à la corbeille…", false, self.prise.is_some())
+                let n = self.selection.nombre();
+                if n > 1 {
+                    if ui.menu_item(format!("Mettre les {n} prises choisies à la corbeille…")) {
+                        self.demander_corbeille(self.selection.choisies_dans(&self.chemins_des_prises()));
+                    }
+                } else if ui.menu_item_enabled_selected_no_shortcut("Mettre la prise à la corbeille…", false, self.prise.is_some())
                     && let Some(p) = &self.prise
                 {
-                    self.demander_corbeille(p.video.clone());
+                    self.demander_corbeille(vec![p.video.clone()]);
                 }
                 m.end();
             }
