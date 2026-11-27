@@ -31,6 +31,8 @@ pub struct Capture {
     partiel: PathBuf,
     dossier: PathBuf,
     debut: Option<Instant>,
+    /// Le lancement de l'enregistreur : le temps passé à attendre le choix de la fenêtre se compte d'ici.
+    lancee: Instant,
     /// Les secondes filmées, figées à l'arrêt.
     pub duree: Option<f64>,
     stoppee: bool,
@@ -121,7 +123,14 @@ impl Capture {
                 }
             });
         }
-        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: media::sons::Micro::lancer(SEUIL_MUET), decompte: None, decale: 0.0, avec_decompte, debut: None, duree: None, stoppee: false, arret: None, relances: 0, fini: false, derniere_ligne, travail: None })
+        Ok(Self { enfant, partiel, dossier: dossier.to_path_buf(), micro: media::sons::Micro::lancer(SEUIL_MUET), decompte: None, decale: 0.0, avec_decompte, debut: None, lancee: Instant::now(), duree: None, stoppee: false, arret: None, relances: 0, fini: false, derniere_ligne, travail: None })
+    }
+
+    /// Les secondes passées à attendre le choix de la fenêtre dans le dialogue du portail ; `None` une fois choisie,
+    /// arrêtée ou finie.
+    pub fn attente_du_choix(&self) -> Option<f64> {
+        let attend = self.debut.is_none() && self.decompte.is_none() && !self.stoppee && !self.fini && self.arret.is_none();
+        attend.then(|| self.lancee.elapsed().as_secs_f64())
     }
 
     /// Les secondes filmées ; `None` tant que la fenêtre n'est pas choisie.

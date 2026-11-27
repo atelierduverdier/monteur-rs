@@ -401,6 +401,15 @@ fn chemin_webcam() -> PathBuf {
     chemin_fiches().with_file_name("webcam")
 }
 
+/// Le message pendant qu'on choisit la fenêtre à filmer.
+const MESSAGE_CHOISIR_FENETRE: &str = "Choisis la fenêtre à filmer.";
+/// Sous Linux, au bout de ce temps sans fenêtre choisie, le message dit que la boîte de choix vient de KDE.
+#[cfg(not(windows))]
+const ATTENTE_BOITE_KDE: f64 = 12.0;
+#[cfg(not(windows))]
+const MESSAGE_BOITE_KDE: &str = "Toujours pas de boîte pour choisir la fenêtre ? Elle vient de KDE : après une mise à jour, \
+     elle peut ne plus s'ouvrir tant qu'on n'a pas redémarré la session. « Annuler le choix », puis redémarre.";
+
 #[cfg(windows)]
 /// Windows : la dernière fenêtre filmée (programme et titre), choisie d'avance dans la boîte du choix.
 fn chemin_jeton_portail() -> PathBuf {
@@ -1097,7 +1106,7 @@ impl Monteur {
             Ok(c) => {
                 self.capture = Some(c);
                 self.capture_simple = simple;
-                self.message = "Choisis la fenêtre à filmer.".into();
+                self.message = MESSAGE_CHOISIR_FENETRE.into();
                 self.raccourci.get_or_insert_with(raccourci::lancer);
                 if !simple {
                     self.lancer_webcam(&dossier);
@@ -1123,6 +1132,15 @@ impl Monteur {
             self.filmer_fenetre_verdiercam();
             #[cfg(windows)]
             self.attendre_verdiercam();
+        }
+        // LA BOÎTE DE CHOIX QUI NE VIENT PAS (27/11/2026). Sous Linux, c'est KDE qui la dessine, pas le Monteur : après
+        // une mise à jour de Qt sans redémarrage, elle ne s'ouvrait plus, et Christophe restait devant « Choisis la
+        // fenêtre à filmer » sans fenêtre. Au bout d'un moment, le message dit d'où ça vient et quoi faire.
+        #[cfg(not(windows))]
+        if self.message == MESSAGE_CHOISIR_FENETRE
+            && self.capture.as_ref().and_then(capture::Capture::attente_du_choix).is_some_and(|s| s >= ATTENTE_BOITE_KDE)
+        {
+            self.message = MESSAGE_BOITE_KDE.into();
         }
         let Some(fin) = self.capture.as_mut().and_then(capture::Capture::suivre) else { return };
         let duree = self.capture.take().and_then(|c| c.duree).unwrap_or(0.0);
@@ -1170,7 +1188,7 @@ impl Monteur {
         }
         capture::demander_sans_cadre();
         self.choix_fenetre = Some(capture::ChoixFenetre::nouveau(simple, Some(&chemin_jeton_portail())));
-        self.message = "Choisis la fenêtre à filmer.".into();
+        self.message = MESSAGE_CHOISIR_FENETRE.into();
     }
 
     #[cfg(windows)]
